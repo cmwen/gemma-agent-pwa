@@ -1,0 +1,18 @@
+{
+  "name": "@gemma-agent-pwa/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --out-dir dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx dist/index.js"
+  },
+  "dependencies": {
+    "@gemma-agent-pwa/contracts": "workspace:*",
+    "@gemma-agent-pwa/min-kb-bridge": "workspace:*",
+    "@hono/node-server": "latest",
+    "hono": "latest"
+  }
+}

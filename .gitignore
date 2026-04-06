@@ -1,0 +1,6 @@
+node_modules
+dist
+coverage
+.DS_Store
+apps/web/.vite
+apps/web/dev-dist

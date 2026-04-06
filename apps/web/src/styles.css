@@ -1,0 +1,370 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  background: #0b1120;
+  color: #e5e7eb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top, rgba(52, 211, 153, 0.14), transparent 30%),
+    #0b1120;
+}
+
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 280px 280px minmax(0, 1fr) 320px;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 1.25rem;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(12px);
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1.25rem 1.25rem 0.75rem;
+}
+
+.panel-header h1,
+.panel-header h2,
+.panel-header h3,
+.empty-state h3 {
+  margin: 0.25rem 0 0;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #86efac;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rail,
+.sessions-panel,
+.detail-panel {
+  overflow: hidden;
+}
+
+.agent-list,
+.session-list,
+.timeline {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: auto;
+  padding: 0 1rem 1rem;
+}
+
+.agent-card,
+.session-card {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.6);
+  color: inherit;
+  cursor: pointer;
+  padding: 0.95rem;
+  text-align: left;
+}
+
+.agent-card.is-active,
+.session-card.is-active {
+  border-color: rgba(52, 211, 153, 0.65);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.35);
+}
+
+.agent-card p,
+.session-card p,
+.detail-section p,
+.empty-state p {
+  margin: 0.4rem 0 0;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.agent-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chip-row,
+.hint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.chip,
+.status-chip {
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.9);
+  padding: 0.3rem 0.65rem;
+  font-size: 0.76rem;
+}
+
+.status-generating {
+  background: rgba(59, 130, 246, 0.24);
+}
+
+.status-ready {
+  background: rgba(34, 197, 94, 0.24);
+}
+
+.status-offline {
+  background: rgba(244, 63, 94, 0.24);
+}
+
+.chat-panel {
+  min-height: 0;
+}
+
+.chat-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.chat-header-controls,
+.composer-toolbar,
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.select,
+.composer-input,
+.ghost-button,
+.primary-button,
+.secondary-button,
+.mode-toggle button {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.9rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: inherit;
+}
+
+.select {
+  min-width: 13rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.8);
+}
+
+.mode-toggle button {
+  padding: 0.55rem 0.85rem;
+  border: 0;
+  background: transparent;
+}
+
+.mode-toggle .is-active {
+  background: rgba(52, 211, 153, 0.2);
+}
+
+.timeline {
+  padding: 1rem 1.25rem;
+}
+
+.message-card {
+  max-width: min(52rem, 100%);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 1.1rem;
+  padding: 1rem 1.1rem;
+  line-height: 1.6;
+}
+
+.message-card.user {
+  align-self: flex-end;
+  background: rgba(52, 211, 153, 0.14);
+}
+
+.message-card.assistant {
+  align-self: flex-start;
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.message-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.8rem;
+  color: #94a3b8;
+  font-size: 0.86rem;
+}
+
+.message-card p {
+  margin: 0.6rem 0;
+}
+
+.thinking-details {
+  margin-top: 0.9rem;
+}
+
+.thinking-details summary {
+  cursor: pointer;
+  color: #86efac;
+}
+
+.thinking-details pre {
+  overflow: auto;
+  white-space: pre-wrap;
+  background: rgba(2, 6, 23, 0.66);
+  padding: 0.85rem;
+  border-radius: 0.85rem;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  padding: 1rem 1.25rem 1.25rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.composer-input {
+  min-height: 7.5rem;
+  resize: vertical;
+  padding: 0.95rem 1rem;
+}
+
+.ghost-button,
+.secondary-button,
+.primary-button {
+  cursor: pointer;
+  padding: 0.7rem 0.95rem;
+}
+
+.primary-button {
+  border-color: rgba(52, 211, 153, 0.5);
+  background: rgba(52, 211, 153, 0.16);
+}
+
+.primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.detail-section {
+  padding: 0 1.25rem 1.25rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.detail-section h3 {
+  margin-bottom: 0.55rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0.9rem 0 0;
+}
+
+.stats-grid div {
+  border-radius: 0.95rem;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 0.85rem;
+}
+
+.stats-grid dt {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+.stats-grid dd {
+  margin: 0.3rem 0 0;
+  font-size: 0.92rem;
+}
+
+.empty-state {
+  margin: auto;
+  max-width: 32rem;
+  text-align: center;
+}
+
+.empty-state.small {
+  margin: 1rem;
+}
+
+.error-text {
+  margin: 0;
+  color: #fda4af;
+}
+
+@media (max-width: 1280px) {
+  .app-shell {
+    grid-template-columns: 240px 260px minmax(0, 1fr);
+  }
+
+  .detail-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 980px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-header,
+  .composer-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .chat-header-controls,
+  .composer-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .select {
+    min-width: 0;
+    width: 100%;
+  }
+}

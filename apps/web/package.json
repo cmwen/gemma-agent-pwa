@@ -1,0 +1,30 @@
+{
+  "name": "@gemma-agent-pwa/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "vite --host",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@gemma-agent-pwa/contracts": "workspace:*",
+    "@tanstack/react-query": "^5.90.2",
+    "dexie": "^4.2.1",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-markdown": "latest",
+    "remark-gfm": "^4.0.1",
+    "workbox-window": "^7.4.0",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "^5.2.0",
+    "vite": "^7.1.12",
+    "vite-plugin-pwa": "latest"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@gemma-agent-pwa/min-kb-bridge",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gemma-agent-pwa/contracts": "workspace:*",
+    "gray-matter": "latest"
+  }
+}
