@@ -61,7 +61,7 @@ pnpm build
 pnpm lint
 ```
 
-The web app runs on `http://localhost:4173` and proxies API calls to `http://localhost:8787`.
+The web app runs on `http://localhost:55006` and proxies API calls to `http://localhost:8787`.
 
 ## GitHub Pages
 
