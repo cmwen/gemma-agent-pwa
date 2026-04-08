@@ -44,6 +44,10 @@ export LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 export LM_STUDIO_MODEL=google/gemma-3-4b
 ```
 
+When `LM_STUDIO_BASE_URL` is unset, the API now tries `127.0.0.1`, `localhost`,
+and the current machine hostname (for example `minipc-wsl`) before reporting LM
+Studio as offline.
+
 Optional API CORS overrides for a GitHub Pages-hosted frontend:
 
 ```bash
@@ -61,7 +65,17 @@ pnpm build
 pnpm lint
 ```
 
-The web app runs on `http://localhost:55006` and proxies API calls to `http://localhost:8787`.
+`pnpm dev` now picks a matched free web/API port pair automatically, then prints
+the selected URLs before launching both processes. In dev, the browser stays on
+same-origin `/api` requests and Vite proxies them to the selected API port, so
+hostname URLs like `http://minipc-wsl:55008/` keep working. This also avoids the
+shared environment collisions around `55006` and `8787`.
+
+If you run the apps separately, the defaults are still `http://localhost:55006`
+for the web app and `http://localhost:8787` for the API. The Vite dev server
+also allows the local hostname plus detected Tailscale MagicDNS hosts (for
+example `http://minipc-wsl.tail2e322f.ts.net:55008/`) by default; add more
+hosts with `GEMMA_AGENT_PWA_ALLOWED_HOSTS=host1,host2`.
 
 ## GitHub Pages
 

@@ -1,3 +1,4 @@
+import os from "node:os";
 import type {
   ChatRuntimeConfig,
   ChatTurn,
@@ -7,6 +8,7 @@ import type {
 import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
+const DEFAULT_LOCALHOST_BASE_URL = "http://localhost:1234/v1";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
 const THINKING_BLOCK_PATTERNS = [
@@ -14,6 +16,7 @@ const THINKING_BLOCK_PATTERNS = [
   /^\s*<thinking>\s*([\s\S]*?)\s*<\/thinking>\s*/i,
   /^\s*<reasoning>\s*([\s\S]*?)\s*<\/reasoning>\s*/i,
 ];
+let preferredBaseUrl: string | undefined;
 
 interface LmStudioChatCompletionResponse {
   id?: string;
@@ -75,8 +78,8 @@ export async function listLmStudioModels(): Promise<ModelDescriptor[]> {
 
 export async function getLmStudioModelCatalog(): Promise<LmStudioModelCatalog> {
   try {
-    const response = await fetchWithTimeout(
-      `${getBaseUrl()}/models`,
+    const response = await fetchLmStudio(
+      "/models",
       undefined,
       DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
       "LM Studio model discovery"
@@ -168,8 +171,8 @@ async function sendStreamingRequest(
   body: Record<string, unknown>
 ): Promise<Response> {
   const attempt = () =>
-    fetchWithTimeout(
-      `${getBaseUrl()}/chat/completions`,
+    fetchLmStudio(
+      "/chat/completions",
       {
         method: "POST",
         headers: {
@@ -523,8 +526,8 @@ class StreamAccumulator {
 }
 
 async function loadModel(model: string): Promise<void> {
-  const response = await fetchWithTimeout(
-    `${getNativeBaseUrl()}/api/v1/models/load`,
+  const response = await fetchLmStudioNative(
+    "/api/v1/models/load",
     {
       method: "POST",
       headers: {
@@ -554,23 +557,111 @@ function formatChatError(status: number, body: string): string {
   return `LM Studio chat request failed (${status}): ${body.trim() || "Unknown error."}`;
 }
 
-function getBaseUrl(): string {
-  return normalizeBaseUrl(
-    process.env.GEMMA_AGENT_PWA_LM_STUDIO_BASE_URL ??
-      process.env.MIN_KB_APP_LM_STUDIO_BASE_URL ??
-      process.env.LM_STUDIO_BASE_URL ??
-      DEFAULT_BASE_URL
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/$/, "");
+}
+
+async function fetchLmStudio(
+  pathname: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  return fetchLmStudioAcrossCandidates(
+    getBaseUrlCandidates(),
+    pathname,
+    init,
+    timeoutMs,
+    label
   );
 }
 
-function getNativeBaseUrl(): string {
-  const url = new URL(getBaseUrl());
+async function fetchLmStudioNative(
+  pathname: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  return fetchLmStudioAcrossCandidates(
+    getBaseUrlCandidates().map(toNativeBaseUrl),
+    pathname,
+    init,
+    timeoutMs,
+    label
+  );
+}
+
+async function fetchLmStudioAcrossCandidates(
+  baseUrls: string[],
+  pathname: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+  label: string
+): Promise<Response> {
+  let lastError: unknown;
+  for (const baseUrl of baseUrls) {
+    try {
+      const response = await fetchWithTimeout(
+        `${baseUrl}${pathname}`,
+        init,
+        timeoutMs,
+        label
+      );
+      preferredBaseUrl = toApiBaseUrl(baseUrl);
+      return response;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`${label} failed before reaching LM Studio.`);
+}
+
+function getBaseUrlCandidates(): string[] {
+  const explicitBaseUrl =
+    process.env.GEMMA_AGENT_PWA_LM_STUDIO_BASE_URL ??
+    process.env.MIN_KB_APP_LM_STUDIO_BASE_URL ??
+    process.env.LM_STUDIO_BASE_URL;
+  if (explicitBaseUrl) {
+    return [normalizeBaseUrl(explicitBaseUrl)];
+  }
+
+  const hostname = os.hostname().trim().toLowerCase();
+  return dedupeUrls([
+    preferredBaseUrl,
+    DEFAULT_BASE_URL,
+    DEFAULT_LOCALHOST_BASE_URL,
+    hostname &&
+    hostname !== "localhost" &&
+    hostname !== "127.0.0.1" &&
+    hostname !== "::1"
+      ? `http://${hostname}:1234/v1`
+      : undefined,
+  ]);
+}
+
+function toNativeBaseUrl(value: string): string {
+  const url = new URL(value);
   url.pathname = "";
   return url.toString().replace(/\/$/, "");
 }
 
-function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/$/, "");
+function toApiBaseUrl(value: string): string {
+  return value.endsWith("/v1") ? value : `${value}/v1`;
+}
+
+function dedupeUrls(values: Array<string | undefined>): string[] {
+  const deduped: string[] = [];
+  for (const value of values) {
+    const normalizedValue = value ? normalizeBaseUrl(value) : undefined;
+    if (!normalizedValue || deduped.includes(normalizedValue)) {
+      continue;
+    }
+    deduped.push(normalizedValue);
+  }
+  return deduped;
 }
 
 function getConfiguredModelDescriptors(): ModelDescriptor[] {
@@ -613,6 +704,10 @@ async function fetchWithTimeout(
 
 export const __testing = {
   combineTextCandidates,
+  dedupeUrls,
   extractPayloadSections,
+  getBaseUrlCandidates,
   splitLeadingThinkingBlocks,
+  toApiBaseUrl,
+  toNativeBaseUrl,
 };

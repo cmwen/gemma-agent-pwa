@@ -10,7 +10,7 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "vitest run",
-    "dev": "concurrently -k -n api,web \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev": "tsx scripts/dev.ts",
     "dev:api": "pnpm --filter @gemma-agent-pwa/api dev",
     "dev:web": "pnpm --filter @gemma-agent-pwa/web dev"
   },

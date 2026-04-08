@@ -22,6 +22,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamText } from "hono/streaming";
+import { getDetectedWebOrigins, splitCsv } from "../../../scripts/network.js";
 import {
   getLmStudioModelCatalog,
   listLmStudioModels,
@@ -238,18 +239,12 @@ function summarizeThread(assistantText: string): string {
 }
 
 function getAllowedCorsOrigins(): Set<string> {
-  const configuredOrigins = (process.env.GEMMA_AGENT_PWA_CORS_ORIGINS ?? "")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean);
+  const configuredOrigins = splitCsv(process.env.GEMMA_AGENT_PWA_CORS_ORIGINS);
 
   return new Set([
-    "http://localhost:4173",
-    "http://127.0.0.1:4173",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:55006",
-    "http://127.0.0.1:55006",
+    ...getDetectedWebOrigins(4173),
+    ...getDetectedWebOrigins(5173),
+    ...getDetectedWebOrigins(55006),
     ...configuredOrigins,
   ]);
 }

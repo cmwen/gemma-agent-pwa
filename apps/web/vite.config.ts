@@ -1,14 +1,25 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { getDetectedAllowedHosts, splitCsv } from "../../scripts/network.js";
 
 const basePath = normalizeBasePath(process.env.VITE_BASE_PATH);
 const apiBaseUrl = process.env.VITE_API_BASE_URL;
-const apiUrl = apiBaseUrl ? new URL(apiBaseUrl) : undefined;
+const apiUrl = parseAbsoluteUrl(apiBaseUrl);
+const webPort = Number(process.env.GEMMA_AGENT_PWA_WEB_PORT ?? 55006);
+const apiProxyTarget =
+  process.env.GEMMA_AGENT_PWA_API_PROXY_TARGET ??
+  apiUrl?.origin ??
+  "http://localhost:8787";
 const apiPathPrefix = `${trimTrailingSlash(apiUrl?.pathname ?? "")}/api/`;
 const apiRuntimeCachePattern = apiUrl
   ? new RegExp(`^${escapeRegExp(apiUrl.origin)}${escapeRegExp(apiPathPrefix)}`)
   : /\/api\//;
+const allowedHosts = [
+  ...getDetectedAllowedHosts(
+    splitCsv(process.env.GEMMA_AGENT_PWA_ALLOWED_HOSTS)
+  ),
+];
 
 export default defineConfig({
   base: basePath,
@@ -51,10 +62,12 @@ export default defineConfig({
     }),
   ],
   server: {
-    port: 55006,
+    host: "0.0.0.0",
+    port: webPort,
+    allowedHosts,
     proxy: {
       "/api": {
-        target: "http://localhost:8787",
+        target: apiProxyTarget,
         changeOrigin: true,
       },
     },
@@ -74,6 +87,18 @@ function normalizeBasePath(value = "/"): string {
   return withLeadingSlash.endsWith("/")
     ? withLeadingSlash
     : `${withLeadingSlash}/`;
+}
+
+function parseAbsoluteUrl(value: string | undefined): URL | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function escapeRegExp(value: string): string {
