@@ -149,9 +149,14 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     const sendEvent = async (event: unknown) => {
       await stream.writeln(JSON.stringify(chatStreamEventSchema.parse(event)));
     };
+    let pendingWrite = Promise.resolve();
+    const queueEvent = (event: unknown) => {
+      pendingWrite = pendingWrite.then(() => sendEvent(event));
+      return pendingWrite;
+    };
 
     try {
-      await sendEvent({
+      await queueEvent({
         type: "thread",
         thread: userThread,
       });
@@ -162,7 +167,7 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         agentPrompt: agent.combinedPrompt,
         enabledSkills,
         onSnapshot: (snapshot) => {
-          void sendEvent({
+          void queueEvent({
             type: "assistant_snapshot",
             ...snapshot,
           });
@@ -193,7 +198,8 @@ app.post("/api/agents/:agentId/chat", async (context) => {
       if (!assistantTurn) {
         throw new Error("Assistant turn was not persisted.");
       }
-      await sendEvent({
+      await pendingWrite;
+      await queueEvent({
         type: "complete",
         response: {
           thread: threadWithUsage,
@@ -201,7 +207,8 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         },
       });
     } catch (error) {
-      await sendEvent({
+      await pendingWrite;
+      await queueEvent({
         type: "error",
         error:
           error instanceof Error ? error.message : "Unknown LM Studio error.",

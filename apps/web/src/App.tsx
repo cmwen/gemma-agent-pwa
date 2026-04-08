@@ -29,6 +29,15 @@ interface StreamingState {
   error?: string;
 }
 
+type MobileSection = "agents" | "history" | "chat" | "details";
+
+const MOBILE_SECTIONS: Array<{ id: MobileSection; label: string }> = [
+  { id: "chat", label: "Chat" },
+  { id: "agents", label: "Agents" },
+  { id: "history", label: "History" },
+  { id: "details", label: "Details" },
+];
+
 export default function App() {
   const queryClient = useQueryClient();
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
@@ -43,11 +52,13 @@ export default function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
     {}
   );
+  const [mobileSection, setMobileSection] = useState<MobileSection>("chat");
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
   const [liveThread, setLiveThread] = useState<ChatSession | undefined>();
   const abortRef = useRef<AbortController | null>(null);
+  const timelineRef = useRef<HTMLDivElement | null>(null);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -151,12 +162,33 @@ export default function App() {
     : healthQuery.data?.lmStudioReachable
       ? "Ready"
       : "Offline";
+  const selectedModel = modelsQuery.data?.find(
+    (model) => model.id === runtimeConfig.model
+  );
+  const modelTone = /gemma-4/i.test(runtimeConfig.model ?? "")
+    ? "Gemma 4 tuned"
+    : selectedModel?.isGemma
+      ? "Gemma tuned"
+      : "Model fallback";
 
   const canSend =
     Boolean(selectedAgentId) &&
     draft.trim().length > 0 &&
     !streaming.sending &&
     Boolean(runtimeConfig.model);
+
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+    timeline.scrollTop = timeline.scrollHeight;
+  }, [
+    messages.length,
+    streaming.assistantText,
+    streaming.thinkingText,
+    streaming.sending,
+  ]);
 
   async function handleSend() {
     if (!selectedAgentId || !draft.trim()) {
@@ -255,19 +287,36 @@ export default function App() {
     setSelectedSessionId(selectedAgentId, undefined);
     setLiveThread(undefined);
     setStreaming({ sending: false });
+    setMobileSection("chat");
   }
 
   function handleModeChange(nextMode: "fast" | "think") {
-    setRuntimeConfig((current) => ({
-      ...current,
-      presetId:
-        nextMode === "fast" ? GEMMA_FAST_PRESET_ID : GEMMA_BALANCED_PRESET_ID,
-    }));
+    setRuntimeConfig((current) =>
+      applyPresetRuntimeConfig(
+        current,
+        nextMode === "fast" ? GEMMA_FAST_PRESET_ID : GEMMA_BALANCED_PRESET_ID
+      )
+    );
   }
 
   return (
     <div className="app-shell">
-      <aside className="panel rail">
+      <nav className="mobile-nav" aria-label="Primary navigation">
+        {MOBILE_SECTIONS.map((section) => (
+          <button
+            className={mobileSection === section.id ? "is-active" : ""}
+            key={section.id}
+            onClick={() => setMobileSection(section.id)}
+            type="button"
+          >
+            {section.label}
+          </button>
+        ))}
+      </nav>
+
+      <aside
+        className={buildPanelClassName("panel rail", "agents", mobileSection)}
+      >
         <div className="panel-header">
           <div>
             <p className="eyebrow">Agents</p>
@@ -286,7 +335,10 @@ export default function App() {
             <button
               className={`agent-card ${agent.id === selectedAgentId ? "is-active" : ""}`}
               key={agent.id}
-              onClick={() => setSelectedAgentId(agent.id)}
+              onClick={() => {
+                setSelectedAgentId(agent.id);
+                setMobileSection("chat");
+              }}
               type="button"
             >
               <div className="agent-card-top">
@@ -303,7 +355,13 @@ export default function App() {
         </div>
       </aside>
 
-      <aside className="panel sessions-panel">
+      <aside
+        className={buildPanelClassName(
+          "panel sessions-panel",
+          "history",
+          mobileSection
+        )}
+      >
         <div className="panel-header">
           <div>
             <p className="eyebrow">History</p>
@@ -323,6 +381,7 @@ export default function App() {
                   return;
                 }
                 setSelectedSessionId(selectedAgentId, session.sessionId);
+                setMobileSection("chat");
               }}
               type="button"
             >
@@ -339,13 +398,23 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="panel chat-panel">
+      <main
+        className={buildPanelClassName(
+          "panel chat-panel",
+          "chat",
+          mobileSection
+        )}
+      >
         <header className="chat-header">
           <div>
             <p className="eyebrow">Local Gemma chat</p>
             <h2>
               {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
             </h2>
+            <p className="support-text">
+              {streaming.sending ? "Streaming live" : "Streaming ready"} ·{" "}
+              {modelTone}
+            </p>
           </div>
           <div className="chat-header-controls">
             <select
@@ -383,7 +452,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="timeline">
+        <div className="timeline" ref={timelineRef}>
           {messages.length === 0 ? (
             <div className="empty-state">
               <h3>Local-first Gemma 4 chat</h3>
@@ -456,7 +525,13 @@ export default function App() {
         </footer>
       </main>
 
-      <aside className="panel detail-panel">
+      <aside
+        className={buildPanelClassName(
+          "panel detail-panel",
+          "details",
+          mobileSection
+        )}
+      >
         <div className="panel-header">
           <div>
             <p className="eyebrow">Details</p>
@@ -482,10 +557,9 @@ export default function App() {
           <select
             className="select"
             onChange={(event) =>
-              setRuntimeConfig((current) => ({
-                ...current,
-                presetId: event.target.value,
-              }))
+              setRuntimeConfig((current) =>
+                applyPresetRuntimeConfig(current, event.target.value)
+              )
             }
             value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
           >
@@ -556,9 +630,15 @@ function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
           {props.streaming ? "Streaming..." : formatTime(props.turn.createdAt)}
         </span>
       </div>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {props.turn.bodyMarkdown}
-      </ReactMarkdown>
+      <div className={`message-body ${props.streaming ? "is-streaming" : ""}`}>
+        {props.streaming ? (
+          <div className="streaming-text">{props.turn.bodyMarkdown}</div>
+        ) : (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {props.turn.bodyMarkdown}
+          </ReactMarkdown>
+        )}
+      </div>
       {props.turn.thinkingMarkdown ? (
         <details className="thinking-details">
           <summary>Reasoning trace</summary>
@@ -612,4 +692,29 @@ export function formatTime(timestamp?: string): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+export function applyPresetRuntimeConfig(
+  current: PartialChatRuntimeConfig,
+  presetId: string
+): PartialChatRuntimeConfig {
+  const preset = getPresetById(presetId);
+  return {
+    ...current,
+    presetId: preset.id,
+    lmStudioEnableThinking: preset.lmStudioEnableThinking,
+    maxCompletionTokens: preset.maxCompletionTokens,
+    temperature: preset.temperature,
+    topP: preset.topP,
+  };
+}
+
+function buildPanelClassName(
+  baseClassName: string,
+  section: MobileSection,
+  activeSection: MobileSection
+): string {
+  return `${baseClassName} ${
+    activeSection === section ? "mobile-panel-active" : "mobile-panel-hidden"
+  }`;
 }

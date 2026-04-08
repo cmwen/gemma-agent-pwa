@@ -10,11 +10,13 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "dev": "tsx scripts/dev.ts",
     "dev:api": "pnpm --filter @gemma-agent-pwa/api dev",
     "dev:web": "pnpm --filter @gemma-agent-pwa/web dev"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@biomejs/biome": "latest",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

@@ -19,6 +19,11 @@ body {
     #0b1120;
 }
 
+body,
+#root {
+  min-height: 100vh;
+}
+
 button,
 textarea,
 select {
@@ -31,6 +36,7 @@ select {
   grid-template-columns: 280px 280px minmax(0, 1fr) 320px;
   gap: 1rem;
   padding: 1rem;
+  align-items: stretch;
 }
 
 .panel {
@@ -41,6 +47,10 @@ select {
   border-radius: 1.25rem;
   background: rgba(15, 23, 42, 0.88);
   backdrop-filter: blur(12px);
+}
+
+.mobile-nav {
+  display: none;
 }
 
 .panel-header {
@@ -161,6 +171,12 @@ select {
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
 }
 
+.support-text {
+  margin: 0.45rem 0 0;
+  color: #94a3b8;
+  font-size: 0.86rem;
+}
+
 .chat-header-controls,
 .composer-toolbar,
 .composer-actions {
@@ -239,6 +255,57 @@ select {
 
 .message-card p {
   margin: 0.6rem 0;
+}
+
+.message-body {
+  overflow-wrap: anywhere;
+}
+
+.message-body > :first-child {
+  margin-top: 0;
+}
+
+.message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.message-body pre,
+.message-body table,
+.message-body img {
+  max-width: 100%;
+}
+
+.message-body pre {
+  overflow: auto;
+  padding: 0.9rem;
+  border-radius: 0.85rem;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+.message-body code {
+  word-break: break-word;
+}
+
+.message-body table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-body th,
+.message-body td {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.message-body img {
+  display: block;
+  height: auto;
+  border-radius: 0.85rem;
+}
+
+.streaming-text {
+  white-space: pre-wrap;
 }
 
 .thinking-details {
@@ -349,6 +416,47 @@ select {
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    gap: 0.85rem;
+    padding: 0.85rem;
+  }
+
+  .mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 0.2rem;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(12px);
+  }
+
+  .mobile-nav button {
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 0.85rem;
+    background: transparent;
+    color: inherit;
+    padding: 0.7rem 0.5rem;
+  }
+
+  .mobile-nav .is-active {
+    border-color: rgba(52, 211, 153, 0.55);
+    background: rgba(52, 211, 153, 0.16);
+  }
+
+  .panel {
+    min-height: calc(100vh - 8.5rem);
+  }
+
+  .mobile-panel-hidden {
+    display: none;
+  }
+
+  .mobile-panel-active {
+    display: flex;
   }
 
   .chat-header,
@@ -363,8 +471,29 @@ select {
     justify-content: space-between;
   }
 
+  .chat-header-controls,
+  .composer-actions,
+  .composer-toolbar {
+    align-items: stretch;
+  }
+
   .select {
     min-width: 0;
     width: 100%;
+  }
+
+  .message-card {
+    max-width: 100%;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 981px) {
+  .mobile-panel-hidden,
+  .mobile-panel-active {
+    display: flex;
   }
 }

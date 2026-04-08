@@ -60,6 +60,7 @@ export GEMMA_AGENT_PWA_CORS_ORIGINS=https://YOUR-USER.github.io
 pnpm install
 pnpm dev
 pnpm test
+pnpm test:e2e
 pnpm typecheck
 pnpm build
 pnpm lint

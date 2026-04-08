@@ -1,5 +1,9 @@
+import {
+  GEMMA_BALANCED_PRESET_ID,
+  GEMMA_FAST_PRESET_ID,
+} from "@gemma-agent-pwa/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { buildMessages, formatTime } from "./App";
+import { applyPresetRuntimeConfig, buildMessages, formatTime } from "./App";
 
 describe("buildMessages", () => {
   it("appends a streaming assistant message when partial output exists", () => {
@@ -54,5 +58,30 @@ describe("formatTime", () => {
 
     expect(formatTime("2026-04-06T21:00:00.000Z")).toBe("Apr 6, 9:00 PM");
     expect(localeSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("applyPresetRuntimeConfig", () => {
+  it("applies the selected preset defaults over previous runtime overrides", () => {
+    expect(
+      applyPresetRuntimeConfig(
+        {
+          model: "google/gemma-4b-it",
+          presetId: GEMMA_BALANCED_PRESET_ID,
+          lmStudioEnableThinking: true,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          topP: 0.95,
+        },
+        GEMMA_FAST_PRESET_ID
+      )
+    ).toMatchObject({
+      model: "google/gemma-4b-it",
+      presetId: GEMMA_FAST_PRESET_ID,
+      lmStudioEnableThinking: false,
+      maxCompletionTokens: 2048,
+      temperature: 0.2,
+      topP: 0.92,
+    });
   });
 });
