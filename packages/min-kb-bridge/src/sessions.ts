@@ -20,6 +20,7 @@ import {
   senderSchema,
   storedAttachmentSchema,
 } from "@gemma-agent-pwa/contracts";
+import { parsePersistedRuntimeConfig } from "./runtime-config.js";
 import {
   compactTimestamp,
   displayTimestamp,
@@ -587,7 +588,7 @@ async function readRuntimeConfig(
     return undefined;
   }
 
-  return chatRuntimeConfigSchema.parse(JSON.parse(raw));
+  return parsePersistedRuntimeConfig(raw);
 }
 
 async function writeRuntimeConfig(

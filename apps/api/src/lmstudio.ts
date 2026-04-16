@@ -419,6 +419,16 @@ function splitLeadingThinkingBlocks(content: string): {
   thinkingBlocks: string[];
   remainingContent: string;
 } {
+  return splitLeadingThinkingBlocksWithOptions(content, true);
+}
+
+function splitLeadingThinkingBlocksWithOptions(
+  content: string,
+  trimRemainingContent: boolean
+): {
+  thinkingBlocks: string[];
+  remainingContent: string;
+} {
   const thinkingBlocks: string[] = [];
   let remainingContent = content;
 
@@ -442,8 +452,40 @@ function splitLeadingThinkingBlocks(content: string): {
 
   return {
     thinkingBlocks,
-    remainingContent: remainingContent.trim(),
+    remainingContent: trimRemainingContent
+      ? remainingContent.trim()
+      : remainingContent,
   };
+}
+
+function extractStreamingContentSections(
+  payload: string | LmStudioContentPart[] | undefined
+): StreamSnapshot {
+  const split = splitLeadingThinkingBlocksWithOptions(
+    extractRawPayload(payload),
+    false
+  );
+  const thinkingText = split.thinkingBlocks.join("\n\n") || undefined;
+  return {
+    ...(split.remainingContent
+      ? { assistantText: split.remainingContent }
+      : {}),
+    ...(thinkingText ? { thinkingText } : {}),
+  };
+}
+
+function extractStreamingReasoningSections(
+  payload: string | LmStudioContentPart[] | undefined
+): StreamSnapshot {
+  const rawPayload = extractRawPayload(payload);
+  if (!rawPayload) {
+    return {};
+  }
+
+  const split = splitLeadingThinkingBlocksWithOptions(rawPayload, false);
+  const thinkingText =
+    split.thinkingBlocks.join("\n\n") || split.remainingContent || undefined;
+  return thinkingText ? { thinkingText } : {};
 }
 
 function combineSections(sections: StreamSnapshot[]): StreamSnapshot {
@@ -457,6 +499,39 @@ function combineSections(sections: StreamSnapshot[]): StreamSnapshot {
     ...(assistantText ? { assistantText } : {}),
     ...(thinkingText ? { thinkingText } : {}),
   };
+}
+
+function mergeStreamText(
+  current: string | undefined,
+  next: string | undefined
+): string | undefined {
+  if (!next) {
+    return current;
+  }
+  if (!current) {
+    return next;
+  }
+  if (current === next || current.endsWith(next)) {
+    return current;
+  }
+  if (next.startsWith(current)) {
+    return next;
+  }
+
+  const overlapLength = findTextOverlap(current, next);
+  return overlapLength > 0
+    ? `${current}${next.slice(overlapLength)}`
+    : `${current}${next}`;
+}
+
+function findTextOverlap(left: string, right: string): number {
+  const maxOverlap = Math.min(left.length, right.length);
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    if (left.slice(-size) === right.slice(0, size)) {
+      return size;
+    }
+  }
+  return 0;
 }
 
 function combineTextCandidates(
@@ -497,23 +572,32 @@ class StreamAccumulator {
     if (!delta) {
       return undefined;
     }
-    const nextSnapshot = combineSections([
-      extractPayloadSections(delta.content),
-      extractPayloadSections(delta.reasoning_content),
-      extractPayloadSections(delta.reasoning),
-    ]);
+    const contentSnapshot = extractStreamingContentSections(delta.content);
+    const nextThinkingText = mergeStreamText(
+      mergeStreamText(
+        contentSnapshot.thinkingText,
+        extractStreamingReasoningSections(delta.reasoning_content).thinkingText
+      ),
+      extractStreamingReasoningSections(delta.reasoning).thinkingText
+    );
+    const nextSnapshot = {
+      ...(contentSnapshot.assistantText
+        ? { assistantText: contentSnapshot.assistantText }
+        : {}),
+      ...(nextThinkingText ? { thinkingText: nextThinkingText } : {}),
+    };
     if (!nextSnapshot.assistantText && !nextSnapshot.thinkingText) {
       return undefined;
     }
 
-    this.assistantText = combineTextCandidates([
+    this.assistantText = mergeStreamText(
       this.assistantText,
-      nextSnapshot.assistantText,
-    ]);
-    this.thinkingText = combineTextCandidates([
+      nextSnapshot.assistantText
+    );
+    this.thinkingText = mergeStreamText(
       this.thinkingText,
-      nextSnapshot.thinkingText,
-    ]);
+      nextSnapshot.thinkingText
+    );
     return this.getSnapshot();
   }
 
@@ -703,10 +787,12 @@ async function fetchWithTimeout(
 }
 
 export const __testing = {
+  StreamAccumulator,
   combineTextCandidates,
   dedupeUrls,
   extractPayloadSections,
   getBaseUrlCandidates,
+  mergeStreamText,
   splitLeadingThinkingBlocks,
   toApiBaseUrl,
   toNativeBaseUrl,

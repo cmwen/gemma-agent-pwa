@@ -631,13 +631,9 @@ function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
         </span>
       </div>
       <div className={`message-body ${props.streaming ? "is-streaming" : ""}`}>
-        {props.streaming ? (
-          <div className="streaming-text">{props.turn.bodyMarkdown}</div>
-        ) : (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-            {props.turn.bodyMarkdown}
-          </ReactMarkdown>
-        )}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {props.turn.bodyMarkdown}
+        </ReactMarkdown>
       </div>
       {props.turn.thinkingMarkdown ? (
         <details className="thinking-details">

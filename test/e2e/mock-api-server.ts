@@ -81,6 +81,11 @@ const server = createServer(async (request, response) => {
     return writeJson(response, 200, models);
   }
 
+  if (method === "POST" && url.pathname === "/api/test/reset") {
+    completedSession = undefined;
+    return writeJson(response, 200, { ok: true });
+  }
+
   if (method === "GET" && url.pathname === "/api/agents") {
     return writeJson(response, 200, [
       { ...agent, sessionCount: completedSession ? 1 : 0 },
@@ -196,6 +201,12 @@ const server = createServer(async (request, response) => {
         "| --- | --- |",
         "| Streaming | Ready |",
         "| Layout | Mobile friendly |",
+        "",
+        "```ts",
+        "export function wrapInsideCard(url: string) {",
+        "  return url.split('/').join('/\\n');",
+        "}",
+        "```",
         "",
         "`https://example.com/really/long/mobile/path/that/should/wrap/inside/the/chat/card/without/overflow`",
       ].join("\n"),

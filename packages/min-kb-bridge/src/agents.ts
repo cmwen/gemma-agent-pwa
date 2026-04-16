@@ -6,8 +6,8 @@ import type {
   SkillDescriptor,
   SkillScope,
 } from "@gemma-agent-pwa/contracts";
-import { chatRuntimeConfigSchema } from "@gemma-agent-pwa/contracts";
 import matter from "gray-matter";
+import { parsePersistedRuntimeConfig } from "./runtime-config.js";
 import {
   firstParagraph,
   normalizeAgentId,
@@ -257,7 +257,7 @@ async function readRuntimeConfigIfExists(
     return undefined;
   }
 
-  return chatRuntimeConfigSchema.parse(JSON.parse(raw));
+  return parsePersistedRuntimeConfig(raw);
 }
 
 async function countAgentSessions(historyRoot: string): Promise<number> {

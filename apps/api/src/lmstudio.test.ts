@@ -40,6 +40,32 @@ describe("lmstudio parsing", () => {
       ])
     ).toBe("Plan the migration.\nThen summarize the risk.");
   });
+
+  it("appends incremental streaming deltas without inserting blank lines", () => {
+    const accumulator = new __testing.StreamAccumulator();
+
+    expect(
+      accumulator.consumeChunk({
+        choices: [{ delta: { content: "Plan" } }],
+      })
+    ).toEqual({
+      assistantText: "Plan",
+    });
+    expect(
+      accumulator.consumeChunk({
+        choices: [{ delta: { content: " the migration" } }],
+      })
+    ).toEqual({
+      assistantText: "Plan the migration",
+    });
+    expect(
+      accumulator.consumeChunk({
+        choices: [{ delta: { content: ".\nThen summarize the risk." } }],
+      })
+    ).toEqual({
+      assistantText: "Plan the migration.\nThen summarize the risk.",
+    });
+  });
 });
 
 describe("LM Studio model catalog", () => {

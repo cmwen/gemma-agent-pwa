@@ -227,6 +227,7 @@ select {
 
 .message-card {
   max-width: min(52rem, 100%);
+  min-width: 0;
   border: 1px solid rgba(148, 163, 184, 0.12);
   border-radius: 1.1rem;
   padding: 1rem 1.1rem;
@@ -245,6 +246,7 @@ select {
 
 .message-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -253,12 +255,24 @@ select {
   font-size: 0.86rem;
 }
 
+.message-header strong,
+.message-header span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .message-card p {
   margin: 0.6rem 0;
 }
 
 .message-body {
+  min-width: 0;
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.message-body > * {
+  min-width: 0;
 }
 
 .message-body > :first-child {
@@ -271,19 +285,24 @@ select {
 
 .message-body pre,
 .message-body table,
-.message-body img {
+.message-body img,
+.thinking-details pre {
   max-width: 100%;
 }
 
 .message-body pre {
-  overflow: auto;
+  overflow-x: auto;
   padding: 0.9rem;
   border-radius: 0.85rem;
   background: rgba(2, 6, 23, 0.72);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
-.message-body code {
+.message-body code,
+.message-body a {
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .message-body table {
@@ -304,12 +323,9 @@ select {
   border-radius: 0.85rem;
 }
 
-.streaming-text {
-  white-space: pre-wrap;
-}
-
 .thinking-details {
   margin-top: 0.9rem;
+  min-width: 0;
 }
 
 .thinking-details summary {
@@ -318,8 +334,9 @@ select {
 }
 
 .thinking-details pre {
-  overflow: auto;
+  overflow-x: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   background: rgba(2, 6, 23, 0.66);
   padding: 0.85rem;
   border-radius: 0.85rem;
@@ -484,6 +501,13 @@ select {
 
   .message-card {
     max-width: 100%;
+    padding: 0.9rem;
+  }
+
+  .message-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.35rem;
   }
 
   .stats-grid {
