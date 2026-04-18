@@ -5,6 +5,7 @@ import type {
   LlmRequestStats,
   ModelDescriptor,
 } from "@gemma-agent-pwa/contracts";
+import { DEFAULT_CONTEXT_WINDOW_SIZE } from "@gemma-agent-pwa/contracts";
 import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
@@ -126,7 +127,12 @@ export async function streamLmStudioChat(
     messages: buildMessages(
       input.conversation,
       input.agentPrompt,
-      input.enabledSkills
+      input.enabledSkills,
+      {
+        contextWindowSize:
+          input.config.contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+        maxCompletionTokens: input.config.maxCompletionTokens ?? 4096,
+      }
     ),
     max_completion_tokens: input.config.maxCompletionTokens,
     temperature: input.config.temperature,
@@ -201,21 +207,83 @@ async function sendStreamingRequest(
   return response;
 }
 
+const CHARS_PER_TOKEN_ESTIMATE = 4;
+const MESSAGE_OVERHEAD_TOKENS = 4;
+
+function estimateTokens(text: string): number {
+  return (
+    Math.ceil(text.length / CHARS_PER_TOKEN_ESTIMATE) + MESSAGE_OVERHEAD_TOKENS
+  );
+}
+
+interface ContextBudget {
+  contextWindowSize: number;
+  maxCompletionTokens: number;
+}
+
 function buildMessages(
   conversation: ChatTurn[],
   agentPrompt: string | undefined,
-  enabledSkills: LoadedSkillDocument[]
+  enabledSkills: LoadedSkillDocument[],
+  budget: ContextBudget
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
   const systemPrompt = buildSystemPrompt(agentPrompt, enabledSkills);
+  const systemTokens = systemPrompt ? estimateTokens(systemPrompt) : 0;
+  const availableForHistory =
+    budget.contextWindowSize - systemTokens - budget.maxCompletionTokens;
+
   const history = conversation
     .filter((turn) => turn.bodyMarkdown.trim().length > 0)
     .map((turn) => ({
       role: mapTurnRole(turn.sender),
       content: turn.bodyMarkdown.trim(),
     }));
+
+  const trimmedHistory = trimToContextWindow(history, availableForHistory);
+
   return systemPrompt
-    ? [{ role: "system", content: systemPrompt }, ...history]
-    : history;
+    ? [{ role: "system", content: systemPrompt }, ...trimmedHistory]
+    : trimmedHistory;
+}
+
+function trimToContextWindow(
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  maxTokens: number
+): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  if (maxTokens <= 0) {
+    const last = messages[messages.length - 1];
+    return last ? [last] : [];
+  }
+
+  let totalTokens = 0;
+  for (const message of messages) {
+    totalTokens += estimateTokens(message.content);
+  }
+
+  if (totalTokens <= maxTokens) {
+    return messages;
+  }
+
+  // Keep messages from the end (most recent) until we exceed the budget
+  const kept: Array<{
+    role: "system" | "user" | "assistant";
+    content: string;
+  }> = [];
+  let usedTokens = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (!msg) {
+      continue;
+    }
+    const messageTokens = estimateTokens(msg.content);
+    if (usedTokens + messageTokens > maxTokens && kept.length > 0) {
+      break;
+    }
+    kept.unshift(msg);
+    usedTokens += messageTokens;
+  }
+
+  return kept;
 }
 
 function buildSystemPrompt(
@@ -274,10 +342,10 @@ async function readChatCompletionStream(
     const { done, value } = await reader.read();
     buffer += decoder.decode(value, { stream: !done });
 
-    let boundaryIndex = buffer.indexOf("\n\n");
-    while (boundaryIndex >= 0) {
-      const block = buffer.slice(0, boundaryIndex);
-      buffer = buffer.slice(boundaryIndex + 2);
+    let nextBlock = extractNextStreamBlock(buffer);
+    while (nextBlock) {
+      const { block, rest } = nextBlock;
+      buffer = rest;
       const chunk = parseStreamChunk(block);
       if (chunk && chunk !== "[DONE]") {
         mergeCompletionChunk(completion, chunk);
@@ -286,7 +354,7 @@ async function readChatCompletionStream(
           onSnapshot(snapshot);
         }
       }
-      boundaryIndex = buffer.indexOf("\n\n");
+      nextBlock = extractNextStreamBlock(buffer);
     }
 
     if (done) {
@@ -324,18 +392,36 @@ async function readChatCompletionStream(
   return completion;
 }
 
+function extractNextStreamBlock(
+  buffer: string
+): { block: string; rest: string } | undefined {
+  const boundary = /\r?\n\r?\n/.exec(buffer);
+  if (boundary?.index === undefined) {
+    return undefined;
+  }
+  return {
+    block: buffer.slice(0, boundary.index),
+    rest: buffer.slice(boundary.index + boundary[0].length),
+  };
+}
+
 function parseStreamChunk(
   block: string
 ): LmStudioChatCompletionResponse | "[DONE]" | undefined {
-  const data = block
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .join("\n");
-  if (!data) {
+  const trimmedBlock = block.trim();
+  if (!trimmedBlock) {
     return undefined;
   }
+
+  const dataLines = trimmedBlock
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim());
+  if (dataLines.length === 0) {
+    return JSON.parse(trimmedBlock) as LmStudioChatCompletionResponse;
+  }
+  const data = dataLines.join("\n");
   if (data === "[DONE]") {
     return "[DONE]";
   }
@@ -788,12 +874,17 @@ async function fetchWithTimeout(
 
 export const __testing = {
   StreamAccumulator,
+  buildMessages,
   combineTextCandidates,
   dedupeUrls,
+  estimateTokens,
+  extractNextStreamBlock,
   extractPayloadSections,
   getBaseUrlCandidates,
   mergeStreamText,
+  parseStreamChunk,
   splitLeadingThinkingBlocks,
   toApiBaseUrl,
   toNativeBaseUrl,
+  trimToContextWindow,
 };

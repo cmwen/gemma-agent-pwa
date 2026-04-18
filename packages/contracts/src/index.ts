@@ -12,10 +12,13 @@ export const runtimePresetSchema = z.object({
   description: z.string().min(1),
   lmStudioEnableThinking: z.boolean(),
   maxCompletionTokens: z.number().int().positive(),
+  contextWindowSize: z.number().int().positive(),
   temperature: z.number().min(0).max(2),
   topP: z.number().min(0).max(1),
 });
 export type RuntimePreset = z.infer<typeof runtimePresetSchema>;
+
+export const DEFAULT_CONTEXT_WINDOW_SIZE = 32_768;
 
 export const GEMMA_PRESETS = runtimePresetSchema.array().parse([
   {
@@ -25,6 +28,7 @@ export const GEMMA_PRESETS = runtimePresetSchema.array().parse([
       "Thinking off for quick drafting, follow-ups, and short answers.",
     lmStudioEnableThinking: false,
     maxCompletionTokens: 2048,
+    contextWindowSize: DEFAULT_CONTEXT_WINDOW_SIZE,
     temperature: 0.2,
     topP: 0.92,
   },
@@ -34,6 +38,7 @@ export const GEMMA_PRESETS = runtimePresetSchema.array().parse([
     description: "Thinking on for stronger everyday planning and analysis.",
     lmStudioEnableThinking: true,
     maxCompletionTokens: 4096,
+    contextWindowSize: DEFAULT_CONTEXT_WINDOW_SIZE,
     temperature: 0.2,
     topP: 0.95,
   },
@@ -44,6 +49,7 @@ export const GEMMA_PRESETS = runtimePresetSchema.array().parse([
       "Thinking on with a larger completion budget for harder tasks.",
     lmStudioEnableThinking: true,
     maxCompletionTokens: 8192,
+    contextWindowSize: DEFAULT_CONTEXT_WINDOW_SIZE,
     temperature: 0.15,
     topP: 0.95,
   },
@@ -71,6 +77,7 @@ export const chatRuntimeConfigSchema = z.object({
   presetId: z.string().min(1).default(GEMMA_BALANCED_PRESET_ID),
   lmStudioEnableThinking: z.boolean().optional(),
   maxCompletionTokens: z.number().int().positive().optional(),
+  contextWindowSize: z.number().int().positive().optional(),
   temperature: z.number().min(0).max(2).optional(),
   topP: z.number().min(0).max(1).optional(),
   disabledSkills: z.array(z.string()).default([]),
@@ -114,6 +121,7 @@ export function mergeRuntimeConfig(
       parsed.lmStudioEnableThinking ?? preset.lmStudioEnableThinking,
     maxCompletionTokens:
       parsed.maxCompletionTokens ?? preset.maxCompletionTokens,
+    contextWindowSize: parsed.contextWindowSize ?? preset.contextWindowSize,
     temperature: parsed.temperature ?? preset.temperature,
     topP: parsed.topP ?? preset.topP,
     disabledSkills: parsed.disabledSkills,

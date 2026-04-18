@@ -1,6 +1,10 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, getLmStudioModelCatalog } from "./lmstudio.js";
+import {
+  __testing,
+  getLmStudioModelCatalog,
+  streamLmStudioChat,
+} from "./lmstudio.js";
 
 const originalLmStudioModel = process.env.LM_STUDIO_MODEL;
 const originalLmStudioBaseUrl = process.env.LM_STUDIO_BASE_URL;
@@ -64,6 +68,62 @@ describe("lmstudio parsing", () => {
       })
     ).toEqual({
       assistantText: "Plan the migration.\nThen summarize the risk.",
+    });
+  });
+
+  it("parses plain JSON completion bodies when SSE framing is absent", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: "google/gemma-3-4b",
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 7,
+          },
+          choices: [
+            {
+              message: {
+                content: "Final answer.",
+              },
+            },
+          ],
+        })
+      )
+    );
+
+    await expect(
+      streamLmStudioChat({
+        model: "google/gemma-3-4b",
+        config: {
+          provider: "lmstudio",
+          model: "google/gemma-3-4b",
+          presetId: "gemma4-balanced",
+          lmStudioEnableThinking: true,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          topP: 0.95,
+          disabledSkills: [],
+        },
+        conversation: [
+          {
+            messageId: "turn-1",
+            sender: "user",
+            createdAt: "2026-04-16T00:00:00.000Z",
+            bodyMarkdown: "Hello",
+            relativePath: "agents/test/history/session-1/turn-1.md",
+          },
+        ],
+        enabledSkills: [],
+        onSnapshot: vi.fn(),
+      })
+    ).resolves.toMatchObject({
+      assistantText: "Final answer.",
+      llmStats: {
+        model: "google/gemma-3-4b",
+        requestCount: 1,
+        inputTokens: 11,
+        outputTokens: 7,
+      },
     });
   });
 });
@@ -132,5 +192,115 @@ describe("LM Studio URL helpers", () => {
     expect(__testing.getBaseUrlCandidates()).toContain(
       "http://minipc-wsl:1234/v1"
     );
+  });
+});
+
+describe("rolling context window", () => {
+  it("estimates tokens from text length", () => {
+    // 12 chars → ceil(12/4) + 4 overhead = 7
+    expect(__testing.estimateTokens("Hello world!")).toBe(7);
+    // empty → ceil(0/4) + 4 = 4
+    expect(__testing.estimateTokens("")).toBe(4);
+  });
+
+  it("keeps all messages when within budget", () => {
+    const messages = [
+      { role: "user" as const, content: "Hi" },
+      { role: "assistant" as const, content: "Hello!" },
+      { role: "user" as const, content: "How are you?" },
+    ];
+    const result = __testing.trimToContextWindow(messages, 10_000);
+    expect(result).toEqual(messages);
+  });
+
+  it("trims oldest messages when over budget", () => {
+    const messages = [
+      {
+        role: "user" as const,
+        content: "First message that is fairly long and should be trimmed",
+      },
+      {
+        role: "assistant" as const,
+        content: "First reply that is also fairly long and should be trimmed",
+      },
+      { role: "user" as const, content: "Recent question" },
+      { role: "assistant" as const, content: "Recent answer" },
+    ];
+    // Budget enough for only the last 2 messages
+    const recentTokens =
+      __testing.estimateTokens("Recent question") +
+      __testing.estimateTokens("Recent answer");
+    const result = __testing.trimToContextWindow(messages, recentTokens);
+    expect(result).toEqual([
+      { role: "user", content: "Recent question" },
+      { role: "assistant", content: "Recent answer" },
+    ]);
+  });
+
+  it("always keeps at least the last message even when budget is zero", () => {
+    const messages = [{ role: "user" as const, content: "Only message" }];
+    const result = __testing.trimToContextWindow(messages, 0);
+    expect(result).toEqual([{ role: "user", content: "Only message" }]);
+  });
+
+  it("returns empty array when no messages exist", () => {
+    expect(__testing.trimToContextWindow([], 100)).toEqual([]);
+  });
+
+  it("buildMessages trims conversation to fit context window", () => {
+    const conversation = Array.from({ length: 20 }, (_, i) => ({
+      messageId: `turn-${i}`,
+      sender: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      createdAt: "2026-04-16T00:00:00.000Z",
+      bodyMarkdown: `Message ${i} ${"x".repeat(200)}`,
+      relativePath: `turns/turn-${i}.md`,
+    }));
+
+    // Tiny context window that can't fit all messages
+    const result = __testing.buildMessages(
+      conversation,
+      "You are a helpful assistant.",
+      [],
+      { contextWindowSize: 512, maxCompletionTokens: 128 }
+    );
+
+    // System prompt should always be first
+    expect(result[0]?.role).toBe("system");
+    // Should have fewer messages than the original 20
+    expect(result.length).toBeLessThan(21);
+    // Last message should be the most recent turn
+    expect(result[result.length - 1]?.content).toContain("Message 19");
+  });
+
+  it("buildMessages keeps all messages when context window is large enough", () => {
+    const conversation = [
+      {
+        messageId: "turn-1",
+        sender: "user" as const,
+        createdAt: "2026-04-16T00:00:00.000Z",
+        bodyMarkdown: "Hello",
+        relativePath: "turns/turn-1.md",
+      },
+      {
+        messageId: "turn-2",
+        sender: "assistant" as const,
+        createdAt: "2026-04-16T00:00:01.000Z",
+        bodyMarkdown: "Hi there!",
+        relativePath: "turns/turn-2.md",
+      },
+    ];
+
+    const result = __testing.buildMessages(
+      conversation,
+      "You are helpful.",
+      [],
+      { contextWindowSize: 32_768, maxCompletionTokens: 4096 }
+    );
+
+    // System + 2 conversation turns
+    expect(result).toHaveLength(3);
+    expect(result[0]?.role).toBe("system");
+    expect(result[1]?.content).toBe("Hello");
+    expect(result[2]?.content).toBe("Hi there!");
   });
 });
