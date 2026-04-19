@@ -68,6 +68,8 @@ export const skillDescriptorSchema = z.object({
   scope: skillScopeSchema,
   path: z.string().min(1),
   sourceRoot: z.string().min(1),
+  hasScript: z.boolean().default(false),
+  scriptPath: z.string().optional(),
 });
 export type SkillDescriptor = z.infer<typeof skillDescriptorSchema>;
 
@@ -273,6 +275,17 @@ export const chatStreamEventSchema = z.discriminatedUnion("type", [
     type: z.literal("assistant_snapshot"),
     assistantText: z.string().optional(),
     thinkingText: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("skill_call"),
+    skillName: z.string().min(1),
+    skillInput: z.string(),
+  }),
+  z.object({
+    type: z.literal("skill_result"),
+    skillName: z.string().min(1),
+    skillOutput: z.string(),
+    exitCode: z.number().int(),
   }),
   z.object({
     type: z.literal("complete"),

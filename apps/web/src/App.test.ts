@@ -3,7 +3,11 @@ import {
   GEMMA_FAST_PRESET_ID,
 } from "@gemma-agent-pwa/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { applyPresetRuntimeConfig, buildMessages, formatTime } from "./App";
+import {
+  applyPresetRuntimeConfig,
+  buildMessages,
+  formatTime,
+} from "./app-utils";
 
 describe("buildMessages", () => {
   it("appends a streaming assistant message when partial output exists", () => {

@@ -290,10 +290,34 @@ function buildSystemPrompt(
   agentPrompt: string | undefined,
   enabledSkills: LoadedSkillDocument[]
 ): string | undefined {
+  const executableSkills = enabledSkills.filter((s) => s.hasScript);
+  const skillCallInstructions =
+    executableSkills.length > 0
+      ? [
+          "## Skill execution",
+          "",
+          "You have access to executable skills. To run a skill, emit a skill_call block:",
+          "",
+          "```",
+          '<skill_call name="skill-name">input for the skill</skill_call>',
+          "```",
+          "",
+          "The system will execute the skill and return its output. You may then continue reasoning.",
+          "Only call skills that are listed below as executable. You may call multiple skills in one response.",
+          "",
+          "### Executable skills",
+          ...executableSkills.map(
+            (skill) => `- **${skill.name}**: ${skill.description}`
+          ),
+        ].join("\n")
+      : undefined;
+
   const sections = [
     "You are running through LM Studio inside Gemma Agent PWA.",
     "Stay grounded in the current conversation and the provided agent instructions.",
-    "Do not imply tool execution, MCP access, or external system results unless they already appear in the conversation.",
+    executableSkills.length > 0
+      ? undefined
+      : "Do not imply tool execution, MCP access, or external system results unless they already appear in the conversation.",
     agentPrompt?.trim()
       ? `## Agent instructions\n\n${agentPrompt.trim()}`
       : undefined,
@@ -302,10 +326,11 @@ function buildSystemPrompt(
           "## Enabled skills",
           ...enabledSkills.map(
             (skill) =>
-              `### ${skill.name}\n- Scope: ${skill.scope}\n- Description: ${skill.description}\n\n${skill.content.trim()}`
+              `### ${skill.name}\n- Scope: ${skill.scope}\n- Description: ${skill.description}${skill.hasScript ? "\n- **Executable**: yes" : ""}\n\n${skill.content.trim()}`
           ),
         ].join("\n\n")
       : undefined,
+    skillCallInstructions,
   ].filter((section): section is string => Boolean(section?.trim()));
   return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
@@ -875,6 +900,7 @@ async function fetchWithTimeout(
 export const __testing = {
   StreamAccumulator,
   buildMessages,
+  buildSystemPrompt,
   combineTextCandidates,
   dedupeUrls,
   estimateTokens,

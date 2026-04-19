@@ -3,10 +3,10 @@ import { persist } from "zustand/middleware";
 
 interface AppStore {
   selectedAgentId?: string;
-  selectedSessionIds: Record<string, string | undefined>;
+  selectedSessionIds: Record<string, string | null>;
   drafts: Record<string, string>;
   setSelectedAgentId: (agentId?: string) => void;
-  setSelectedSessionId: (agentId: string, sessionId?: string) => void;
+  setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
   setDraft: (key: string, value: string) => void;
 }
 
@@ -21,7 +21,7 @@ export const useAppStore = create<AppStore>()(
         set((state) => ({
           selectedSessionIds: {
             ...state.selectedSessionIds,
-            [agentId]: sessionId,
+            [agentId]: sessionId ?? null,
           },
         })),
       setDraft: (key, value) =>
@@ -37,6 +37,23 @@ export const useAppStore = create<AppStore>()(
     }
   )
 );
+
+export function hasStoredSessionSelection(
+  selectedSessionIds: Record<string, string | null>,
+  agentId: string
+): boolean {
+  return Object.hasOwn(selectedSessionIds, agentId);
+}
+
+export function getSelectedSessionId(
+  selectedSessionIds: Record<string, string | null>,
+  agentId?: string
+): string | undefined {
+  if (!agentId) {
+    return undefined;
+  }
+  return selectedSessionIds[agentId] ?? undefined;
+}
 
 export function buildDraftKey(agentId?: string, sessionId?: string): string {
   return `${agentId ?? "unknown"}:${sessionId ?? "new"}`;

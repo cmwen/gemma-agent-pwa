@@ -18,6 +18,14 @@ import {
 } from "./utils.js";
 import type { MinKbWorkspace } from "./workspace.js";
 
+const SKILL_SCRIPT_NAMES = [
+  "run.sh",
+  "run.py",
+  "run.js",
+  "run.ts",
+  "run",
+] as const;
+
 interface MarkdownDocument {
   content: string;
   data: Record<string, unknown>;
@@ -211,16 +219,31 @@ async function readSkillDescriptors(
         ? document.data.description
         : firstParagraph(document.content);
 
+    const skillDir = path.dirname(filePath);
+    const scriptPath = await findSkillScript(skillDir);
+
     descriptors.push({
       name,
       description,
       scope,
       path: filePath,
       sourceRoot: root,
+      hasScript: scriptPath !== undefined,
+      ...(scriptPath ? { scriptPath } : {}),
     });
   }
 
   return descriptors.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function findSkillScript(skillDir: string): Promise<string | undefined> {
+  for (const scriptName of SKILL_SCRIPT_NAMES) {
+    const candidate = path.join(skillDir, scriptName);
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 async function readMarkdownDocument(

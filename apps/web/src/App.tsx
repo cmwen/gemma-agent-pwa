@@ -12,6 +12,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  applyPresetRuntimeConfig,
+  buildMessages,
+  formatTime,
+} from "./app-utils";
+import {
   getAgent,
   getAgents,
   getHealth,
@@ -20,12 +25,18 @@ import {
   getSessions,
   streamChat,
 } from "./lib/api";
-import { buildDraftKey, useAppStore } from "./lib/store";
+import {
+  buildDraftKey,
+  getSelectedSessionId,
+  hasStoredSessionSelection,
+  useAppStore,
+} from "./lib/store";
 
 interface StreamingState {
   sending: boolean;
   assistantText?: string;
   thinkingText?: string;
+  skillActivity?: string;
   error?: string;
 }
 
@@ -102,8 +113,10 @@ export default function App() {
     if (!selectedAgentId) {
       return;
     }
-    const activeSessionId = selectedSessionIds[selectedAgentId];
-    if (!activeSessionId && sessionsQuery.data?.[0]) {
+    if (
+      !hasStoredSessionSelection(selectedSessionIds, selectedAgentId) &&
+      sessionsQuery.data?.[0]
+    ) {
       setSelectedSessionId(selectedAgentId, sessionsQuery.data[0].sessionId);
     }
   }, [
@@ -113,9 +126,10 @@ export default function App() {
     setSelectedSessionId,
   ]);
 
-  const activeSessionId = selectedAgentId
-    ? selectedSessionIds[selectedAgentId]
-    : undefined;
+  const activeSessionId = getSelectedSessionId(
+    selectedSessionIds,
+    selectedAgentId
+  );
 
   const sessionQuery = useQuery({
     queryKey: ["session", selectedAgentId, activeSessionId],
@@ -227,6 +241,19 @@ export default function App() {
                   ...state,
                   assistantText: event.assistantText,
                   thinkingText: event.thinkingText,
+                  skillActivity: undefined,
+                }));
+                break;
+              case "skill_call":
+                setStreaming((state) => ({
+                  ...state,
+                  skillActivity: `Running skill: ${event.skillName}…`,
+                }));
+                break;
+              case "skill_result":
+                setStreaming((state) => ({
+                  ...state,
+                  skillActivity: `Skill ${event.skillName} completed (exit ${event.exitCode})`,
                 }));
                 break;
               case "complete":
@@ -284,7 +311,7 @@ export default function App() {
     if (!selectedAgentId) {
       return;
     }
-    setSelectedSessionId(selectedAgentId, undefined);
+    setSelectedSessionId(selectedAgentId, null);
     setLiveThread(undefined);
     setStreaming({ sending: false });
     setMobileSection("chat");
@@ -412,8 +439,12 @@ export default function App() {
               {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
             </h2>
             <p className="support-text">
-              {streaming.sending ? "Streaming live" : "Streaming ready"} ·{" "}
-              {modelTone}
+              {streaming.skillActivity
+                ? streaming.skillActivity
+                : streaming.sending
+                  ? "Streaming live"
+                  : "Streaming ready"}{" "}
+              · {modelTone}
             </p>
           </div>
           <div className="chat-header-controls">
@@ -643,66 +674,6 @@ function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
       ) : null}
     </article>
   );
-}
-
-export function buildMessages(
-  thread: ChatSession | undefined,
-  streaming: StreamingState
-): Array<{ key: string; turn: ChatTurn; streaming?: boolean }> {
-  const turns = (thread?.turns ?? []).map((turn) => ({
-    key: turn.messageId,
-    turn,
-  }));
-  if (
-    !streaming.sending ||
-    (!streaming.assistantText && !streaming.thinkingText)
-  ) {
-    return turns;
-  }
-  return [
-    ...turns,
-    {
-      key: "streaming-assistant",
-      streaming: true,
-      turn: {
-        messageId: "streaming-assistant",
-        sender: "assistant",
-        createdAt: new Date().toISOString(),
-        bodyMarkdown: streaming.assistantText ?? "",
-        relativePath: "",
-        ...(streaming.thinkingText
-          ? { thinkingMarkdown: streaming.thinkingText }
-          : {}),
-      },
-    },
-  ];
-}
-
-export function formatTime(timestamp?: string): string {
-  if (!timestamp) {
-    return "—";
-  }
-  return new Date(timestamp).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-export function applyPresetRuntimeConfig(
-  current: PartialChatRuntimeConfig,
-  presetId: string
-): PartialChatRuntimeConfig {
-  const preset = getPresetById(presetId);
-  return {
-    ...current,
-    presetId: preset.id,
-    lmStudioEnableThinking: preset.lmStudioEnableThinking,
-    maxCompletionTokens: preset.maxCompletionTokens,
-    temperature: preset.temperature,
-    topP: preset.topP,
-  };
 }
 
 function buildPanelClassName(
