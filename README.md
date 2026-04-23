@@ -83,7 +83,7 @@ hosts with `GEMMA_AGENT_PWA_ALLOWED_HOSTS=host1,host2`.
 The repository includes a GitHub Actions workflow that publishes `apps/web/dist` to GitHub Pages on every push to `main`.
 
 - The build sets the Vite base path to `/<repo-name>/` automatically.
-- By default, the published frontend points at `http://127.0.0.1:8787/api` so you can use the Pages site against your local API runtime.
+- By default, the published frontend points at `http://minipc.local/api`.
 - To point the Pages build at a different API, set a repository variable named `VITE_API_BASE_URL`.
 
 ## Notes
