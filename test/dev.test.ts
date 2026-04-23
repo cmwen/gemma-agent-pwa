@@ -48,6 +48,7 @@ describe("dev launcher helpers", () => {
       "http://localhost:55008",
       "http://127.0.0.1:55008",
       "http://minipc-wsl:55008",
+      "http://minipc.local:55008",
     ]);
   });
 

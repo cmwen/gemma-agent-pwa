@@ -96,7 +96,12 @@ export function buildApiProxyTarget(apiPort: number): string {
 }
 
 export function buildWebOrigins(webPort: number): string[] {
-  return buildHttpOrigins(webPort, ["localhost", "127.0.0.1", "minipc-wsl"]);
+  return buildHttpOrigins(webPort, [
+    "localhost",
+    "127.0.0.1",
+    "minipc-wsl",
+    "minipc.local",
+  ]);
 }
 
 export function appendCsv(

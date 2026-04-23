@@ -26,6 +26,7 @@ describe("network helpers", () => {
       "localhost",
       "127.0.0.1",
       "minipc-wsl",
+      "minipc.local",
       "minipc",
       "minipc-wsl.tail2e322f.ts.net",
       ".tail2e322f.ts.net",
@@ -47,10 +48,15 @@ describe("network helpers", () => {
       "http://localhost:55008",
       "http://127.0.0.1:55008",
       "http://minipc-wsl:55008",
+      "http://minipc.local:55008",
       "http://minipc:55008",
       "http://minipc-wsl.tail2e322f.ts.net:55008",
       "http://100.118.5.8:55008",
       "http://[fd7a:115c:a1e0::9f38:508]:55008",
     ]);
+  });
+
+  it("omits the default HTTP port when building browser origins", () => {
+    expect(getDetectedWebOrigins(80)).toContain("http://minipc.local");
   });
 });

@@ -11,6 +11,12 @@ interface TailscaleStatus {
 }
 
 let cachedTailscaleStatus: TailscaleStatus | null | undefined;
+const defaultLocalHostnames = [
+  "localhost",
+  "127.0.0.1",
+  "minipc-wsl",
+  "minipc.local",
+];
 
 export function splitCsv(value = ""): string[] {
   return value
@@ -60,7 +66,7 @@ export const __testing = {
 };
 
 function getDetectedLocalHostnames(): string[] {
-  return dedupeStrings(["localhost", "127.0.0.1", "minipc-wsl", os.hostname()]);
+  return dedupeStrings([...defaultLocalHostnames, os.hostname()]);
 }
 
 function getTailscaleStatus(): TailscaleStatus | undefined {
@@ -111,5 +117,9 @@ function dedupeStrings(values: Array<string | undefined>): string[] {
 }
 
 function toOrigin(host: string, port: number): string {
-  return `http://${isIP(host) === 6 ? `[${host}]` : host}:${port}`;
+  const normalizedHost = isIP(host) === 6 ? `[${host}]` : host;
+  if (port === 80) {
+    return `http://${normalizedHost}`;
+  }
+  return `http://${normalizedHost}:${port}`;
 }

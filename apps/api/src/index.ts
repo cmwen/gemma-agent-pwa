@@ -365,6 +365,7 @@ function getAllowedCorsOrigins(): Set<string> {
   const configuredOrigins = splitCsv(process.env.GEMMA_AGENT_PWA_CORS_ORIGINS);
 
   return new Set([
+    ...getDetectedWebOrigins(80),
     ...getDetectedWebOrigins(4173),
     ...getDetectedWebOrigins(5173),
     ...getDetectedWebOrigins(55006),
