@@ -1,5 +1,6 @@
 import {
   type ChatSession,
+  type ChatSessionSummary,
   type ChatTurn,
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_FAST_PRESET_ID,
@@ -8,21 +9,32 @@ import {
   type PartialChatRuntimeConfig,
 } from "@gemma-agent-pwa/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   applyPresetRuntimeConfig,
   buildMessages,
   formatTime,
+  getNextFocusableIndex,
+  getNextTheme,
+  isEditableElement,
 } from "./app-utils";
 import {
+  deleteSession as deleteSessionRequest,
   getAgent,
   getAgents,
   getHealth,
   getModels,
   getSession,
   getSessions,
+  restoreSession as restoreSessionRequest,
   streamChat,
 } from "./lib/api";
 import {
@@ -40,7 +52,19 @@ interface StreamingState {
   error?: string;
 }
 
+interface CommandItem {
+  id: string;
+  label: string;
+  description: string;
+  group: "Jump" | "Actions";
+  keywords: string[];
+  shortcut?: string;
+  run: () => void;
+}
+
 type MobileSection = "agents" | "history" | "chat" | "details";
+type HistoryView = "active" | "deleted";
+type SessionAction = "soft-delete" | "restore" | "permanent-delete";
 
 const MOBILE_SECTIONS: Array<{ id: MobileSection; label: string }> = [
   { id: "chat", label: "Chat" },
@@ -54,22 +78,41 @@ export default function App() {
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const selectedSessionIds = useAppStore((state) => state.selectedSessionIds);
   const drafts = useAppStore((state) => state.drafts);
+  const themeMode = useAppStore((state) => state.themeMode);
+  const modelDetailsOpen = useAppStore((state) => state.modelDetailsOpen);
   const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
   const setSelectedSessionId = useAppStore(
     (state) => state.setSelectedSessionId
   );
   const setDraft = useAppStore((state) => state.setDraft);
+  const setThemeMode = useAppStore((state) => state.setThemeMode);
+  const setModelDetailsOpen = useAppStore((state) => state.setModelDetailsOpen);
 
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
     {}
   );
+  const [historyView, setHistoryView] = useState<HistoryView>("active");
   const [mobileSection, setMobileSection] = useState<MobileSection>("chat");
+  const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
   const [liveThread, setLiveThread] = useState<ChatSession | undefined>();
+  const [historyError, setHistoryError] = useState<string>();
+  const [pendingSessionAction, setPendingSessionAction] = useState<{
+    sessionId: string;
+    action: SessionAction;
+  }>();
   const abortRef = useRef<AbortController | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const newChatButtonRef = useRef<HTMLButtonElement | null>(null);
+  const recentHistoryButtonRef = useRef<HTMLButtonElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const modelDetailsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const presetSelectRef = useRef<HTMLSelectElement | null>(null);
+  const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -104,16 +147,22 @@ export default function App() {
   });
 
   const sessionsQuery = useQuery({
-    queryKey: ["sessions", selectedAgentId],
-    queryFn: () => getSessions(selectedAgentId ?? ""),
+    queryKey: ["sessions", selectedAgentId, historyView],
+    queryFn: () => getSessions(selectedAgentId ?? "", historyView),
     enabled: Boolean(selectedAgentId),
   });
+
+  useEffect(() => {
+    setHistoryView("active");
+    setHistoryError(undefined);
+  }, [selectedAgentId]);
 
   useEffect(() => {
     if (!selectedAgentId) {
       return;
     }
     if (
+      historyView === "active" &&
       !hasStoredSessionSelection(selectedSessionIds, selectedAgentId) &&
       sessionsQuery.data?.[0]
     ) {
@@ -121,6 +170,7 @@ export default function App() {
     }
   }, [
     selectedAgentId,
+    historyView,
     selectedSessionIds,
     sessionsQuery.data,
     setSelectedSessionId,
@@ -136,6 +186,32 @@ export default function App() {
     queryFn: () => getSession(selectedAgentId ?? "", activeSessionId ?? ""),
     enabled: Boolean(selectedAgentId && activeSessionId),
   });
+
+  useEffect(() => {
+    if (
+      historyView !== "active" ||
+      !selectedAgentId ||
+      !activeSessionId ||
+      !sessionsQuery.data ||
+      !sessionQuery.data?.deletedAt
+    ) {
+      return;
+    }
+    const isVisibleInActiveList = sessionsQuery.data.some(
+      (session) => session.sessionId === activeSessionId
+    );
+    if (!isVisibleInActiveList) {
+      setSelectedSessionId(selectedAgentId, null);
+      setLiveThread(undefined);
+    }
+  }, [
+    activeSessionId,
+    historyView,
+    selectedAgentId,
+    sessionQuery.data?.deletedAt,
+    sessionsQuery.data,
+    setSelectedSessionId,
+  ]);
 
   const thread =
     liveThread?.sessionId === activeSessionId ? liveThread : sessionQuery.data;
@@ -179,6 +255,7 @@ export default function App() {
   const selectedModel = modelsQuery.data?.find(
     (model) => model.id === runtimeConfig.model
   );
+  const threadDeleted = Boolean(thread?.deletedAt);
   const modelTone = /gemma-4/i.test(runtimeConfig.model ?? "")
     ? "Gemma 4 tuned"
     : selectedModel?.isGemma
@@ -189,7 +266,120 @@ export default function App() {
     Boolean(selectedAgentId) &&
     draft.trim().length > 0 &&
     !streaming.sending &&
-    Boolean(runtimeConfig.model);
+    Boolean(runtimeConfig.model) &&
+    !threadDeleted;
+
+  const commandItems = useMemo<CommandItem[]>(
+    () => [
+      {
+        id: "jump-chat",
+        label: "Go to chat",
+        description: "Focus the active conversation and composer.",
+        group: "Jump",
+        keywords: ["chat", "composer", "conversation"],
+        shortcut: "Alt+1",
+        run: () => focusSection("chat"),
+      },
+      {
+        id: "jump-agents",
+        label: "Go to agents",
+        description: "Browse the installed local agents.",
+        group: "Jump",
+        keywords: ["agents", "sidebar", "navigation"],
+        shortcut: "Alt+2",
+        run: () => focusSection("agents"),
+      },
+      {
+        id: "jump-history",
+        label: "Go to history",
+        description: "Review recent and deleted chats.",
+        group: "Jump",
+        keywords: ["history", "sessions", "trash"],
+        shortcut: "Alt+3",
+        run: () => focusSection("history"),
+      },
+      {
+        id: "jump-details",
+        label: "Go to details",
+        description: "Inspect agent status and runtime settings.",
+        group: "Jump",
+        keywords: ["details", "settings", "status"],
+        shortcut: "Alt+4",
+        run: () => focusSection("details"),
+      },
+      {
+        id: "new-chat",
+        label: "Start new chat",
+        description: "Clear the current thread for the selected agent.",
+        group: "Actions",
+        keywords: ["new", "chat", "thread"],
+        shortcut: "N",
+        run: () => handleNewChat(),
+      },
+      {
+        id: "toggle-history-view",
+        label:
+          historyView === "active"
+            ? "Show deleted history"
+            : "Show recent history",
+        description:
+          historyView === "active"
+            ? "Switch the history rail to Trash."
+            : "Switch the history rail back to recent chats.",
+        group: "Actions",
+        keywords: ["history", "trash", "recent", "deleted"],
+        run: () =>
+          setHistoryView((current) =>
+            current === "active" ? "deleted" : "active"
+          ),
+      },
+      {
+        id: "toggle-model-details",
+        label: modelDetailsOpen ? "Hide model details" : "Show model details",
+        description: "Toggle the advanced preset and model stats panel.",
+        group: "Actions",
+        keywords: ["model", "details", "preset", "settings"],
+        run: () => handleModelDetailsToggle(!modelDetailsOpen),
+      },
+      {
+        id: "toggle-theme",
+        label:
+          themeMode === "dark"
+            ? "Switch to light theme"
+            : "Switch to dark theme",
+        description: "Flip the app theme and persist it locally.",
+        group: "Actions",
+        keywords: ["theme", "light", "dark", "appearance"],
+        run: () => setThemeMode(getNextTheme(themeMode)),
+      },
+    ],
+    [historyView, modelDetailsOpen, themeMode]
+  );
+  const visibleCommandItems = useMemo(() => {
+    const normalizedQuery = commandQuery.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return commandItems;
+    }
+    return commandItems.filter((command) =>
+      [command.label, command.description, ...command.keywords]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery)
+    );
+  }, [commandItems, commandQuery]);
+  const groupedCommandItems = useMemo(
+    () =>
+      (["Jump", "Actions"] as const)
+        .map(
+          (group) =>
+            [
+              group,
+              visibleCommandItems.filter((command) => command.group === group),
+            ] as const
+        )
+        .filter(([, commands]) => commands.length > 0),
+    [visibleCommandItems]
+  );
 
   useEffect(() => {
     const timeline = timelineRef.current;
@@ -204,8 +394,180 @@ export default function App() {
     streaming.sending,
   ]);
 
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode;
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (!isCommandPaletteOpen) {
+      return;
+    }
+    requestAnimationFrame(() => commandPaletteInputRef.current?.focus());
+  }, [isCommandPaletteOpen]);
+
+  function focusSection(section: MobileSection) {
+    setMobileSection(section);
+    requestAnimationFrame(() => {
+      switch (section) {
+        case "agents":
+          newChatButtonRef.current?.focus();
+          break;
+        case "history":
+          recentHistoryButtonRef.current?.focus();
+          break;
+        case "chat":
+          composerInputRef.current?.focus();
+          break;
+        case "details":
+          modelDetailsToggleRef.current?.focus();
+          break;
+      }
+    });
+  }
+
+  function openCommandPalette() {
+    lastFocusedElementRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setCommandQuery("");
+    setCommandPaletteOpen(true);
+  }
+
+  function closeCommandPalette(options?: { restoreFocus?: boolean }) {
+    setCommandPaletteOpen(false);
+    setCommandQuery("");
+    if (options?.restoreFocus === false) {
+      return;
+    }
+    requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
+  }
+
+  function handleModelDetailsToggle(nextOpen: boolean) {
+    setModelDetailsOpen(nextOpen);
+    if (nextOpen) {
+      focusSection("details");
+      requestAnimationFrame(() => presetSelectRef.current?.focus());
+    }
+  }
+
+  function handleCommandSelection(command: CommandItem) {
+    closeCommandPalette({ restoreFocus: false });
+    command.run();
+  }
+
+  function handleArrowKeyNavigation(
+    event: ReactKeyboardEvent<HTMLElement>,
+    orientation: "horizontal" | "vertical"
+  ) {
+    const buttons = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>(
+        '[data-roving-focus="true"]:not(:disabled)'
+      )
+    );
+    if (buttons.length === 0) {
+      return;
+    }
+    const activeButton =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const nextIndex = getNextFocusableIndex(
+      activeButton ? buttons.indexOf(activeButton) : -1,
+      buttons.length,
+      event.key,
+      orientation
+    );
+    if (nextIndex === undefined) {
+      return;
+    }
+    event.preventDefault();
+    buttons[nextIndex]?.focus();
+  }
+
+  function handleSiblingArrowKeyNavigation(
+    event: ReactKeyboardEvent<HTMLElement>,
+    orientation: "horizontal" | "vertical"
+  ) {
+    const container = event.currentTarget.parentElement;
+    if (!container) {
+      return;
+    }
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '[data-roving-focus="true"]:not(:disabled)'
+      )
+    );
+    if (buttons.length === 0) {
+      return;
+    }
+    const nextIndex = getNextFocusableIndex(
+      buttons.indexOf(event.currentTarget),
+      buttons.length,
+      event.key,
+      orientation
+    );
+    if (nextIndex === undefined) {
+      return;
+    }
+    event.preventDefault();
+    buttons[nextIndex]?.focus();
+  }
+
+  useEffect(() => {
+    function handleGlobalKeydown(event: globalThis.KeyboardEvent) {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        if (isCommandPaletteOpen) {
+          closeCommandPalette();
+        } else {
+          openCommandPalette();
+        }
+        return;
+      }
+      if (event.key === "Escape" && isCommandPaletteOpen) {
+        event.preventDefault();
+        closeCommandPalette();
+        return;
+      }
+      if (isEditableElement(event.target)) {
+        return;
+      }
+      if (isCommandPaletteOpen) {
+        return;
+      }
+      if (
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key === "/"
+      ) {
+        event.preventDefault();
+        focusSection("chat");
+        return;
+      }
+      if (event.metaKey || event.ctrlKey || event.shiftKey || !event.altKey) {
+        return;
+      }
+      const section = MOBILE_SECTIONS[Number(event.key) - 1]?.id;
+      if (!section) {
+        return;
+      }
+      event.preventDefault();
+      focusSection(section);
+    }
+
+    window.addEventListener("keydown", handleGlobalKeydown);
+    return () => window.removeEventListener("keydown", handleGlobalKeydown);
+  }, [isCommandPaletteOpen]);
+
   async function handleSend() {
-    if (!selectedAgentId || !draft.trim()) {
+    if (!selectedAgentId || !draft.trim() || threadDeleted) {
       return;
     }
     const controller = new AbortController();
@@ -247,12 +609,16 @@ export default function App() {
               case "skill_call":
                 setStreaming((state) => ({
                   ...state,
+                  assistantText: undefined,
+                  thinkingText: undefined,
                   skillActivity: `Running skill: ${event.skillName}…`,
                 }));
                 break;
               case "skill_result":
                 setStreaming((state) => ({
                   ...state,
+                  assistantText: undefined,
+                  thinkingText: undefined,
                   skillActivity: `Skill ${event.skillName} completed (exit ${event.exitCode})`,
                 }));
                 break;
@@ -326,14 +692,118 @@ export default function App() {
     );
   }
 
+  async function handleSessionAction(
+    session: ChatSessionSummary,
+    action: SessionAction
+  ) {
+    if (!selectedAgentId) {
+      return;
+    }
+
+    const confirmed = confirmSessionAction(session, action);
+    if (!confirmed) {
+      return;
+    }
+
+    setHistoryError(undefined);
+    setPendingSessionAction({
+      sessionId: session.sessionId,
+      action,
+    });
+    try {
+      if (action === "restore") {
+        await restoreSessionRequest(selectedAgentId, session.sessionId);
+        setSelectedSessionId(selectedAgentId, session.sessionId);
+        setHistoryView("active");
+      } else {
+        await deleteSessionRequest(
+          selectedAgentId,
+          session.sessionId,
+          action === "soft-delete" ? "soft" : "permanent"
+        );
+        if (activeSessionId === session.sessionId) {
+          setSelectedSessionId(selectedAgentId, null);
+          setLiveThread(undefined);
+          setStreaming({ sending: false });
+          setMobileSection("history");
+        }
+      }
+
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["sessions", selectedAgentId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["session", selectedAgentId, session.sessionId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["agents"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["agent", selectedAgentId],
+        }),
+      ]);
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error ? error.message : "Session action failed."
+      );
+    } finally {
+      setPendingSessionAction(undefined);
+    }
+  }
+
   return (
     <div className="app-shell">
-      <nav className="mobile-nav" aria-label="Primary navigation">
+      <div className="app-toolbar">
+        <button
+          aria-expanded={isCommandPaletteOpen}
+          aria-haspopup="dialog"
+          className="command-trigger"
+          onClick={openCommandPalette}
+          type="button"
+        >
+          <span className="command-trigger-copy">
+            <span className="command-trigger-title">Command palette</span>
+            <span className="command-trigger-subtitle">
+              Jump between panels, switch views, and toggle model details.
+            </span>
+          </span>
+          <kbd>Ctrl/Cmd+K</kbd>
+        </button>
+        <div className="toolbar-meta">
+          <p className="keyboard-hint">Press / to focus the composer.</p>
+          <span className={`status-chip status-${status.toLowerCase()}`}>
+            {status}
+          </span>
+          <span className="chip">
+            {selectedModel?.displayName ?? runtimeConfig.model ?? "No model"}
+          </span>
+          <button
+            aria-label={`Switch to ${
+              themeMode === "dark" ? "light" : "dark"
+            } theme`}
+            className="secondary-button theme-toggle"
+            onClick={() => setThemeMode(getNextTheme(themeMode))}
+            type="button"
+          >
+            Theme: {themeMode === "dark" ? "Dark" : "Light"}
+          </button>
+        </div>
+      </div>
+
+      <nav
+        aria-label="Primary navigation"
+        className="mobile-nav"
+        onKeyDown={(event) => handleArrowKeyNavigation(event, "horizontal")}
+      >
         {MOBILE_SECTIONS.map((section) => (
           <button
+            aria-controls={`app-section-${section.id}`}
+            aria-pressed={mobileSection === section.id}
             className={mobileSection === section.id ? "is-active" : ""}
+            data-roving-focus="true"
             key={section.id}
-            onClick={() => setMobileSection(section.id)}
+            onClick={() => focusSection(section.id)}
             type="button"
           >
             {section.label}
@@ -343,6 +813,7 @@ export default function App() {
 
       <aside
         className={buildPanelClassName("panel rail", "agents", mobileSection)}
+        id="app-section-agents"
       >
         <div className="panel-header">
           <div>
@@ -352,6 +823,7 @@ export default function App() {
           <button
             className="ghost-button"
             onClick={handleNewChat}
+            ref={newChatButtonRef}
             type="button"
           >
             New chat
@@ -360,11 +832,16 @@ export default function App() {
         <div className="agent-list">
           {agentsQuery.data?.map((agent) => (
             <button
+              aria-pressed={agent.id === selectedAgentId}
               className={`agent-card ${agent.id === selectedAgentId ? "is-active" : ""}`}
+              data-roving-focus="true"
               key={agent.id}
+              onKeyDown={(event) =>
+                handleSiblingArrowKeyNavigation(event, "vertical")
+              }
               onClick={() => {
                 setSelectedAgentId(agent.id);
-                setMobileSection("chat");
+                focusSection("chat");
               }}
               type="button"
             >
@@ -388,49 +865,154 @@ export default function App() {
           "history",
           mobileSection
         )}
+        id="app-section-history"
       >
         <div className="panel-header">
           <div>
-            <p className="eyebrow">History</p>
+            <p className="eyebrow">
+              {historyView === "active" ? "History" : "Trash"}
+            </p>
             <h2>{selectedAgent?.title ?? "Select an agent"}</h2>
           </div>
-          <span className={`status-chip status-${status.toLowerCase()}`}>
-            {status}
-          </span>
+          <div className="panel-header-actions">
+            <fieldset
+              className="mode-toggle"
+              aria-label="History view"
+              onKeyDown={(event) =>
+                handleArrowKeyNavigation(event, "horizontal")
+              }
+            >
+              <button
+                aria-pressed={historyView === "active"}
+                className={historyView === "active" ? "is-active" : ""}
+                data-roving-focus="true"
+                onClick={() => setHistoryView("active")}
+                ref={recentHistoryButtonRef}
+                type="button"
+              >
+                Recent
+              </button>
+              <button
+                aria-pressed={historyView === "deleted"}
+                className={historyView === "deleted" ? "is-active" : ""}
+                data-roving-focus="true"
+                onClick={() => setHistoryView("deleted")}
+                type="button"
+              >
+                Trash
+              </button>
+            </fieldset>
+            <span className={`status-chip status-${status.toLowerCase()}`}>
+              {status}
+            </span>
+          </div>
         </div>
+        {historyError ? <p className="panel-error">{historyError}</p> : null}
         <div className="session-list">
           {(sessionsQuery.data ?? []).map((session) => (
-            <button
+            <article
               className={`session-card ${session.sessionId === activeSessionId ? "is-active" : ""}`}
               key={session.sessionId}
-              onClick={() => {
-                if (!selectedAgentId) {
-                  return;
-                }
-                setSelectedSessionId(selectedAgentId, session.sessionId);
-                setMobileSection("chat");
-              }}
-              type="button"
             >
-              <strong>{session.title}</strong>
-              <p>{session.summary}</p>
-              <span>{formatTime(session.lastTurnAt ?? session.startedAt)}</span>
-            </button>
+              <button
+                aria-pressed={session.sessionId === activeSessionId}
+                className="session-card-button"
+                data-roving-focus="true"
+                onKeyDown={(event) =>
+                  handleSiblingArrowKeyNavigation(event, "vertical")
+                }
+                onClick={() => {
+                  if (!selectedAgentId) {
+                    return;
+                  }
+                  setSelectedSessionId(selectedAgentId, session.sessionId);
+                  focusSection("chat");
+                }}
+                type="button"
+              >
+                <div className="session-card-top">
+                  <strong>{session.title}</strong>
+                  {session.deletedAt ? (
+                    <span className="chip chip-danger">Deleted</span>
+                  ) : null}
+                </div>
+                <p>{session.summary}</p>
+                <span className="session-card-meta">
+                  {formatTime(
+                    historyView === "deleted"
+                      ? session.deletedAt
+                      : (session.lastTurnAt ?? session.startedAt)
+                  )}
+                </span>
+              </button>
+              <div className="session-card-actions">
+                {session.deletedAt ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      disabled={Boolean(pendingSessionAction)}
+                      onClick={() =>
+                        void handleSessionAction(session, "restore")
+                      }
+                      type="button"
+                    >
+                      {pendingSessionAction?.sessionId === session.sessionId &&
+                      pendingSessionAction.action === "restore"
+                        ? "Restoring..."
+                        : "Restore"}
+                    </button>
+                    <button
+                      className="danger-button"
+                      disabled={Boolean(pendingSessionAction)}
+                      onClick={() =>
+                        void handleSessionAction(session, "permanent-delete")
+                      }
+                      type="button"
+                    >
+                      {pendingSessionAction?.sessionId === session.sessionId &&
+                      pendingSessionAction.action === "permanent-delete"
+                        ? "Deleting..."
+                        : "Delete forever"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="ghost-button"
+                    disabled={Boolean(pendingSessionAction)}
+                    onClick={() =>
+                      void handleSessionAction(session, "soft-delete")
+                    }
+                    type="button"
+                  >
+                    {pendingSessionAction?.sessionId === session.sessionId &&
+                    pendingSessionAction.action === "soft-delete"
+                      ? "Deleting..."
+                      : "Delete"}
+                  </button>
+                )}
+              </div>
+            </article>
           ))}
           {!sessionsQuery.data?.length && (
             <div className="empty-state small">
-              <p>Start a new thread for this agent to create local history.</p>
+              <p>
+                {historyView === "active"
+                  ? "Start a new thread for this agent to create local history."
+                  : "Soft-deleted chats land here until you restore them or delete them forever."}
+              </p>
             </div>
           )}
         </div>
       </aside>
 
       <main
+        aria-busy={streaming.sending}
         className={buildPanelClassName(
           "panel chat-panel",
           "chat",
           mobileSection
         )}
+        id="app-section-chat"
       >
         <header className="chat-header">
           <div>
@@ -439,51 +1021,84 @@ export default function App() {
               {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
             </h2>
             <p className="support-text">
-              {streaming.skillActivity
-                ? streaming.skillActivity
-                : streaming.sending
-                  ? "Streaming live"
-                  : "Streaming ready"}{" "}
+              {threadDeleted
+                ? "Read-only · moved to Trash"
+                : streaming.skillActivity
+                  ? streaming.skillActivity
+                  : streaming.sending
+                    ? "Streaming live"
+                    : "Streaming ready"}{" "}
               · {modelTone}
             </p>
           </div>
           <div className="chat-header-controls">
-            <select
-              className="select"
-              onChange={(event) =>
-                setRuntimeConfig((current) => ({
-                  ...current,
-                  model: event.target.value,
-                }))
-              }
-              value={runtimeConfig.model ?? ""}
-            >
-              {(modelsQuery.data ?? []).map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.displayName}
-                </option>
-              ))}
-            </select>
-            <fieldset className="mode-toggle" aria-label="Thinking mode">
+            <label className="control-stack">
+              <span className="control-label">Model</span>
+              <select
+                aria-label="Chat model"
+                className="select"
+                onChange={(event) =>
+                  setRuntimeConfig((current) => ({
+                    ...current,
+                    model: event.target.value,
+                  }))
+                }
+                value={runtimeConfig.model ?? ""}
+              >
+                {(modelsQuery.data ?? []).map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="chat-header-actions">
+              <fieldset
+                className="mode-toggle"
+                aria-label="Thinking mode"
+                onKeyDown={(event) =>
+                  handleArrowKeyNavigation(event, "horizontal")
+                }
+              >
+                <button
+                  aria-pressed={modeValue === "fast"}
+                  className={modeValue === "fast" ? "is-active" : ""}
+                  data-roving-focus="true"
+                  onClick={() => handleModeChange("fast")}
+                  type="button"
+                >
+                  Fast
+                </button>
+                <button
+                  aria-pressed={modeValue === "think"}
+                  className={modeValue === "think" ? "is-active" : ""}
+                  data-roving-focus="true"
+                  onClick={() => handleModeChange("think")}
+                  type="button"
+                >
+                  Think
+                </button>
+              </fieldset>
               <button
-                className={modeValue === "fast" ? "is-active" : ""}
-                onClick={() => handleModeChange("fast")}
+                aria-controls="model-details-panel"
+                aria-expanded={modelDetailsOpen}
+                className="ghost-button"
+                onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
                 type="button"
               >
-                Fast
+                {modelDetailsOpen ? "Hide details" : "Model details"}
               </button>
-              <button
-                className={modeValue === "think" ? "is-active" : ""}
-                onClick={() => handleModeChange("think")}
-                type="button"
-              >
-                Think
-              </button>
-            </fieldset>
+            </div>
           </div>
         </header>
 
-        <div className="timeline" ref={timelineRef}>
+        <div
+          aria-label="Conversation timeline"
+          aria-live="polite"
+          className="timeline"
+          ref={timelineRef}
+          role="log"
+        >
           {messages.length === 0 ? (
             <div className="empty-state">
               <h3>Local-first Gemma 4 chat</h3>
@@ -509,7 +1124,10 @@ export default function App() {
             <p className="error-text">{streaming.error}</p>
           ) : null}
           <textarea
+            aria-describedby="composer-shortcuts"
+            aria-label="Message composer"
             className="composer-input"
+            disabled={threadDeleted}
             onChange={(event) => setDraft(draftKey, event.target.value)}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -518,40 +1136,44 @@ export default function App() {
               }
             }}
             placeholder={
-              modeValue === "fast"
-                ? "Ask for a quick answer..."
-                : "Ask for planning, debugging, or multi-step reasoning..."
+              threadDeleted
+                ? "Restore this chat from Trash to continue it."
+                : modeValue === "fast"
+                  ? "Ask for a quick answer..."
+                  : "Ask for planning, debugging, or multi-step reasoning..."
             }
+            ref={composerInputRef}
             value={draft}
           />
-          <div className="composer-toolbar">
-            <div className="hint-list">
-              <span className="chip">{activePreset.title}</span>
-              <span className="chip">
-                {healthQuery.data?.lmStudioReachable
-                  ? "LM Studio connected"
-                  : "History-only mode"}
-              </span>
-            </div>
-            <div className="composer-actions">
-              {streaming.sending ? (
-                <button
-                  className="secondary-button"
-                  onClick={handleStop}
-                  type="button"
-                >
-                  Stop
-                </button>
-              ) : null}
+          <div className="hint-list">
+            <span className="chip">{activePreset.title}</span>
+            <span className="chip">
+              {healthQuery.data?.lmStudioReachable
+                ? "LM Studio connected"
+                : "History-only mode"}
+            </span>
+            <span className="chip" id="composer-shortcuts">
+              Ctrl/Cmd+Enter sends
+            </span>
+          </div>
+          <div className="composer-actions">
+            {streaming.sending ? (
               <button
-                className="primary-button"
-                disabled={!canSend}
-                onClick={() => void handleSend()}
+                className="secondary-button"
+                onClick={handleStop}
                 type="button"
               >
-                Send
+                Stop
               </button>
-            </div>
+            ) : null}
+            <button
+              className="primary-button"
+              disabled={!canSend}
+              onClick={() => void handleSend()}
+              type="button"
+            >
+              Send
+            </button>
           </div>
         </footer>
       </main>
@@ -562,12 +1184,23 @@ export default function App() {
           "details",
           mobileSection
         )}
+        id="app-section-details"
       >
         <div className="panel-header">
           <div>
             <p className="eyebrow">Details</p>
             <h2>{agentDetailQuery.data?.title ?? "No agent selected"}</h2>
           </div>
+          <button
+            aria-controls="model-details-panel"
+            aria-expanded={modelDetailsOpen}
+            className="ghost-button"
+            onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
+            ref={modelDetailsToggleRef}
+            type="button"
+          >
+            {modelDetailsOpen ? "Hide model details" : "Show model details"}
+          </button>
         </div>
         <section className="detail-section">
           <h3>Agent</h3>
@@ -584,45 +1217,74 @@ export default function App() {
           </div>
         </section>
         <section className="detail-section">
-          <h3>Gemma preset</h3>
-          <select
-            className="select"
-            onChange={(event) =>
-              setRuntimeConfig((current) =>
-                applyPresetRuntimeConfig(current, event.target.value)
-              )
-            }
-            value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
-          >
-            {GEMMA_PRESETS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.title}
-              </option>
-            ))}
-          </select>
-          <p>{activePreset.description}</p>
-          <dl className="stats-grid">
-            <div>
-              <dt>Thinking</dt>
-              <dd>{activePreset.lmStudioEnableThinking ? "On" : "Off"}</dd>
-            </div>
-            <div>
-              <dt>Max tokens</dt>
-              <dd>
-                {runtimeConfig.maxCompletionTokens ??
-                  activePreset.maxCompletionTokens}
-              </dd>
-            </div>
-            <div>
-              <dt>Temperature</dt>
-              <dd>{runtimeConfig.temperature ?? activePreset.temperature}</dd>
-            </div>
-            <div>
-              <dt>Top P</dt>
-              <dd>{runtimeConfig.topP ?? activePreset.topP}</dd>
-            </div>
-          </dl>
+          <h3>Model</h3>
+          <p>
+            {selectedModel?.displayName ??
+              runtimeConfig.model ??
+              "Choose a model for this chat."}
+          </p>
+          <div className="chip-row">
+            <span className="chip">{activePreset.title}</span>
+            {selectedModel ? (
+              <span className="chip">{selectedModel.provider}</span>
+            ) : null}
+            <span className="chip">{modelTone}</span>
+          </div>
+          {!modelDetailsOpen ? (
+            <p className="support-text detail-hint">
+              Model details stay hidden by default so the workspace keeps its
+              focus on the conversation.
+            </p>
+          ) : null}
         </section>
+        {modelDetailsOpen ? (
+          <section className="detail-section" id="model-details-panel">
+            <h3>Model details</h3>
+            <select
+              aria-label="Gemma preset"
+              className="select"
+              onChange={(event) =>
+                setRuntimeConfig((current) =>
+                  applyPresetRuntimeConfig(current, event.target.value)
+                )
+              }
+              ref={presetSelectRef}
+              value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
+            >
+              {GEMMA_PRESETS.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.title}
+                </option>
+              ))}
+            </select>
+            <p>{activePreset.description}</p>
+            <dl className="stats-grid">
+              <div>
+                <dt>Provider</dt>
+                <dd>{selectedModel?.provider ?? "—"}</dd>
+              </div>
+              <div>
+                <dt>Thinking</dt>
+                <dd>{activePreset.lmStudioEnableThinking ? "On" : "Off"}</dd>
+              </div>
+              <div>
+                <dt>Max tokens</dt>
+                <dd>
+                  {runtimeConfig.maxCompletionTokens ??
+                    activePreset.maxCompletionTokens}
+                </dd>
+              </div>
+              <div>
+                <dt>Temperature</dt>
+                <dd>{runtimeConfig.temperature ?? activePreset.temperature}</dd>
+              </div>
+              <div>
+                <dt>Top P</dt>
+                <dd>{runtimeConfig.topP ?? activePreset.topP}</dd>
+              </div>
+            </dl>
+          </section>
+        ) : null}
         <section className="detail-section">
           <h3>Local status</h3>
           <p>{healthQuery.data?.message ?? "Checking LM Studio..."}</p>
@@ -646,6 +1308,78 @@ export default function App() {
           </dl>
         </section>
       </aside>
+      {isCommandPaletteOpen ? (
+        <div className="command-palette-overlay">
+          <section
+            aria-labelledby="command-palette-title"
+            aria-modal="true"
+            className="command-palette"
+            role="dialog"
+          >
+            <div className="command-palette-header">
+              <div>
+                <p className="eyebrow">Command palette</p>
+                <h2 id="command-palette-title">Quick actions</h2>
+              </div>
+              <button
+                className="ghost-button"
+                onClick={() => closeCommandPalette()}
+                type="button"
+              >
+                Close <kbd>Esc</kbd>
+              </button>
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const firstCommand = visibleCommandItems[0];
+                if (!firstCommand) {
+                  return;
+                }
+                handleCommandSelection(firstCommand);
+              }}
+            >
+              <input
+                aria-label="Search commands"
+                className="command-palette-search"
+                onChange={(event) => setCommandQuery(event.target.value)}
+                placeholder="Type a command or jump to a panel..."
+                ref={commandPaletteInputRef}
+                value={commandQuery}
+              />
+            </form>
+            <div className="command-palette-list">
+              {groupedCommandItems.length > 0 ? (
+                groupedCommandItems.map(([group, commands]) => (
+                  <div className="command-palette-group" key={group}>
+                    <p className="command-palette-group-label">{group}</p>
+                    {commands.map((command) => (
+                      <button
+                        className="command-item"
+                        key={command.id}
+                        onClick={() => handleCommandSelection(command)}
+                        type="button"
+                      >
+                        <span className="command-item-copy">
+                          <strong>{command.label}</strong>
+                          <span>{command.description}</span>
+                        </span>
+                        {command.shortcut ? (
+                          <kbd>{command.shortcut}</kbd>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                ))
+              ) : (
+                <p className="command-item-empty">
+                  No commands match that search.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -684,4 +1418,21 @@ function buildPanelClassName(
   return `${baseClassName} ${
     activeSection === section ? "mobile-panel-active" : "mobile-panel-hidden"
   }`;
+}
+
+function confirmSessionAction(
+  session: ChatSessionSummary,
+  action: SessionAction
+): boolean {
+  if (action === "restore") {
+    return window.confirm(`Restore "${session.title}" to active history?`);
+  }
+  if (action === "permanent-delete") {
+    return window.confirm(
+      `Permanently delete "${session.title}"? This removes the session files from disk and cannot be undone.`
+    );
+  }
+  return window.confirm(
+    `Move "${session.title}" to Trash? You can restore it later or delete it forever from the Trash view.`
+  );
 }

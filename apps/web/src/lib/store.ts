@@ -1,13 +1,18 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { getPreferredTheme, type ThemeMode } from "../app-utils";
 
 interface AppStore {
   selectedAgentId?: string;
   selectedSessionIds: Record<string, string | null>;
   drafts: Record<string, string>;
+  themeMode: ThemeMode;
+  modelDetailsOpen: boolean;
   setSelectedAgentId: (agentId?: string) => void;
   setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
   setDraft: (key: string, value: string) => void;
+  setThemeMode: (themeMode: ThemeMode) => void;
+  setModelDetailsOpen: (modelDetailsOpen: boolean) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -16,6 +21,8 @@ export const useAppStore = create<AppStore>()(
       selectedAgentId: undefined,
       selectedSessionIds: {},
       drafts: {},
+      themeMode: getPreferredTheme(),
+      modelDetailsOpen: false,
       setSelectedAgentId: (agentId) => set({ selectedAgentId: agentId }),
       setSelectedSessionId: (agentId, sessionId) =>
         set((state) => ({
@@ -31,6 +38,8 @@ export const useAppStore = create<AppStore>()(
             [key]: value,
           },
         })),
+      setThemeMode: (themeMode) => set({ themeMode }),
+      setModelDetailsOpen: (modelDetailsOpen) => set({ modelDetailsOpen }),
     }),
     {
       name: "gemma-agent-pwa-state",

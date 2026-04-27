@@ -11,6 +11,9 @@ interface StreamingStateSnapshot {
   thinkingText?: string;
 }
 
+export type ThemeMode = "light" | "dark";
+export type FocusNavigationOrientation = "horizontal" | "vertical";
+
 export function buildMessages(
   thread: ChatSession | undefined,
   streaming: StreamingStateSnapshot
@@ -69,4 +72,61 @@ export function applyPresetRuntimeConfig(
     temperature: preset.temperature,
     topP: preset.topP,
   };
+}
+
+export function getPreferredTheme(): ThemeMode {
+  if (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-color-scheme: light)").matches
+  ) {
+    return "light";
+  }
+  return "dark";
+}
+
+export function getNextTheme(current: ThemeMode): ThemeMode {
+  return current === "dark" ? "light" : "dark";
+}
+
+export function getNextFocusableIndex(
+  currentIndex: number,
+  totalItems: number,
+  key: string,
+  orientation: FocusNavigationOrientation
+): number | undefined {
+  if (totalItems < 1) {
+    return undefined;
+  }
+
+  if (key === "Home") {
+    return 0;
+  }
+  if (key === "End") {
+    return totalItems - 1;
+  }
+
+  const previousKey = orientation === "horizontal" ? "ArrowLeft" : "ArrowUp";
+  const nextKey = orientation === "horizontal" ? "ArrowRight" : "ArrowDown";
+
+  if (key === previousKey) {
+    return currentIndex <= 0 ? totalItems - 1 : currentIndex - 1;
+  }
+  if (key === nextKey) {
+    return currentIndex < 0 || currentIndex === totalItems - 1
+      ? 0
+      : currentIndex + 1;
+  }
+
+  return undefined;
+}
+
+export function isEditableElement(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement)
+  );
 }

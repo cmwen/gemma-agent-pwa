@@ -19,8 +19,9 @@ test("streams Gemma Fast replies cleanly on mobile without horizontal overflow",
   await expect(page.getByRole("button", { name: "Chat" })).toBeVisible();
 
   await page.getByRole("button", { name: "Fast" }).click();
-  await page.getByRole("textbox").fill("Summarize the mobile release plan.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const composer = page.getByRole("textbox");
+  await composer.fill("Summarize the mobile release plan.");
+  await composer.press("Control+Enter");
 
   const chatPanel = page.getByRole("main");
   await expect(
@@ -63,10 +64,9 @@ test("keeps reasoning traces readable on mobile after the final assistant respon
   await page.goto("/");
 
   await page.getByRole("button", { name: "Think" }).click();
-  await page
-    .getByRole("textbox")
-    .fill("Explain the mobile rendering tradeoffs.");
-  await page.getByRole("button", { name: "Send" }).click();
+  const composer = page.getByRole("textbox");
+  await composer.fill("Explain the mobile rendering tradeoffs.");
+  await composer.press("Control+Enter");
 
   const assistantCard = page.locator(".message-card.assistant").last();
   await expect(assistantCard.getByText("thinking: on")).toBeVisible();
@@ -84,4 +84,62 @@ test("keeps reasoning traces readable on mobile after the final assistant respon
   }));
   expect(overflowMetrics.card).toBeLessThanOrEqual(1);
   expect(overflowMetrics.body).toBeLessThanOrEqual(1);
+});
+
+test("persists theme changes and supports keyboard shortcuts on mobile", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("button", { name: /Command palette/i })
+  ).toBeVisible();
+  await expect(page.getByText("Press / to focus the composer.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Model details" })
+  ).toHaveCount(0);
+
+  const initialTheme = await page.evaluate(
+    () => document.documentElement.dataset.theme
+  );
+  await page.getByRole("button", { name: /Switch to .* theme/i }).click();
+
+  const toggledTheme = await page.evaluate(
+    () => document.documentElement.dataset.theme
+  );
+  expect(toggledTheme).toBeTruthy();
+  expect(toggledTheme).not.toBe(initialTheme);
+
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: /Switch to .* theme/i })
+  ).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.dataset.theme))
+    .toBe(toggledTheme);
+
+  await page.keyboard.press("/");
+  await expect(
+    page.getByRole("textbox", { name: "Message composer" })
+  ).toBeFocused();
+
+  await page.keyboard.press("Control+K");
+  await expect(
+    page.getByRole("dialog", { name: "Quick actions" })
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Quick actions" })).toHaveCount(
+    0
+  );
+
+  await page.getByRole("button", { name: "Model details" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Model details" })
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Chat" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("button", { name: "Agents" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
 });
