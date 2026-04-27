@@ -11,6 +11,12 @@ interface StreamingStateSnapshot {
   thinkingText?: string;
 }
 
+export interface CommandSearchableItem {
+  label: string;
+  description: string;
+  keywords: string[];
+}
+
 export type ThemeMode = "light" | "dark";
 export type FocusNavigationOrientation = "horizontal" | "vertical";
 
@@ -87,6 +93,22 @@ export function getPreferredTheme(): ThemeMode {
 
 export function getNextTheme(current: ThemeMode): ThemeMode {
   return current === "dark" ? "light" : "dark";
+}
+
+export function filterCommandItems<T extends CommandSearchableItem>(
+  commands: T[],
+  query: string
+): T[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return commands;
+  }
+  return commands.filter((command) =>
+    [command.label, command.description, ...command.keywords]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery)
+  );
 }
 
 export function getNextFocusableIndex(

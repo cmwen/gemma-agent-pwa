@@ -21,6 +21,7 @@ import remarkGfm from "remark-gfm";
 import {
   applyPresetRuntimeConfig,
   buildMessages,
+  filterCommandItems,
   formatTime,
   getNextFocusableIndex,
   getNextTheme,
@@ -95,6 +96,7 @@ export default function App() {
   const [mobileSection, setMobileSection] = useState<MobileSection>("chat");
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
+  const [commandSelectionIndex, setCommandSelectionIndex] = useState(0);
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
@@ -356,16 +358,7 @@ export default function App() {
     [historyView, modelDetailsOpen, themeMode]
   );
   const visibleCommandItems = useMemo(() => {
-    const normalizedQuery = commandQuery.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return commandItems;
-    }
-    return commandItems.filter((command) =>
-      [command.label, command.description, ...command.keywords]
-        .join(" ")
-        .toLowerCase()
-        .includes(normalizedQuery)
-    );
+    return filterCommandItems(commandItems, commandQuery);
   }, [commandItems, commandQuery]);
   const groupedCommandItems = useMemo(
     () =>
@@ -380,6 +373,7 @@ export default function App() {
         .filter(([, commands]) => commands.length > 0),
     [visibleCommandItems]
   );
+  const selectedCommand = visibleCommandItems[commandSelectionIndex];
 
   useEffect(() => {
     const timeline = timelineRef.current;
@@ -404,6 +398,19 @@ export default function App() {
     }
     requestAnimationFrame(() => commandPaletteInputRef.current?.focus());
   }, [isCommandPaletteOpen]);
+
+  useEffect(() => {
+    if (!isCommandPaletteOpen) {
+      setCommandSelectionIndex(0);
+      return;
+    }
+    setCommandSelectionIndex((current) => {
+      if (visibleCommandItems.length === 0) {
+        return 0;
+      }
+      return Math.min(current, visibleCommandItems.length - 1);
+    });
+  }, [isCommandPaletteOpen, visibleCommandItems.length]);
 
   function focusSection(section: MobileSection) {
     setMobileSection(section);
@@ -454,6 +461,27 @@ export default function App() {
   function handleCommandSelection(command: CommandItem) {
     closeCommandPalette({ restoreFocus: false });
     command.run();
+  }
+
+  function handleCommandPaletteKeyDown(
+    event: ReactKeyboardEvent<HTMLInputElement>
+  ) {
+    const nextIndex = getNextFocusableIndex(
+      commandSelectionIndex,
+      visibleCommandItems.length,
+      event.key,
+      "vertical"
+    );
+    if (nextIndex !== undefined) {
+      event.preventDefault();
+      setCommandSelectionIndex(nextIndex);
+      return;
+    }
+    if (event.key !== "Enter" || !selectedCommand) {
+      return;
+    }
+    event.preventDefault();
+    handleCommandSelection(selectedCommand);
   }
 
   function handleArrowKeyNavigation(
@@ -755,6 +783,13 @@ export default function App() {
   return (
     <div className="app-shell">
       <div className="app-toolbar">
+        <div className="toolbar-brand">
+          <span className="toolbar-brand-title">Gemma Agent PWA</span>
+          <p className="toolbar-brand-copy">
+            Local-first chat with quick keyboard actions and advanced model
+            controls tucked away until you need them.
+          </p>
+        </div>
         <button
           aria-expanded={isCommandPaletteOpen}
           aria-haspopup="dialog"
@@ -771,13 +806,23 @@ export default function App() {
           <kbd>Ctrl/Cmd+K</kbd>
         </button>
         <div className="toolbar-meta">
-          <p className="keyboard-hint">Press / to focus the composer.</p>
-          <span className={`status-chip status-${status.toLowerCase()}`}>
-            {status}
-          </span>
-          <span className="chip">
-            {selectedModel?.displayName ?? runtimeConfig.model ?? "No model"}
-          </span>
+          <div className="toolbar-metric">
+            <span>Status</span>
+            <strong>{status}</strong>
+          </div>
+          <div className="toolbar-metric">
+            <span>Agent</span>
+            <strong>{selectedAgent?.title ?? "Loading agents"}</strong>
+          </div>
+          <div className="toolbar-metric">
+            <span>Model</span>
+            <strong>
+              {selectedModel?.displayName ?? runtimeConfig.model ?? "No model"}
+            </strong>
+          </div>
+          <p className="keyboard-hint">
+            Press / to focus the composer. Alt+1-4 jumps between panels.
+          </p>
           <button
             aria-label={`Switch to ${
               themeMode === "dark" ? "light" : "dark"
@@ -1030,28 +1075,21 @@ export default function App() {
                     : "Streaming ready"}{" "}
               · {modelTone}
             </p>
+            <div className="chat-overview">
+              <span className="chip">
+                {selectedModel?.displayName ??
+                  runtimeConfig.model ??
+                  "No model"}
+              </span>
+              <span className="chip">{activePreset.title}</span>
+              <span className="chip">
+                {historyView === "active"
+                  ? `${sessionsQuery.data?.length ?? 0} recent chats`
+                  : `${sessionsQuery.data?.length ?? 0} in Trash`}
+              </span>
+            </div>
           </div>
           <div className="chat-header-controls">
-            <label className="control-stack">
-              <span className="control-label">Model</span>
-              <select
-                aria-label="Chat model"
-                className="select"
-                onChange={(event) =>
-                  setRuntimeConfig((current) => ({
-                    ...current,
-                    model: event.target.value,
-                  }))
-                }
-                value={runtimeConfig.model ?? ""}
-              >
-                {(modelsQuery.data ?? []).map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
             <div className="chat-header-actions">
               <fieldset
                 className="mode-toggle"
@@ -1240,23 +1278,48 @@ export default function App() {
         {modelDetailsOpen ? (
           <section className="detail-section" id="model-details-panel">
             <h3>Model details</h3>
-            <select
-              aria-label="Gemma preset"
-              className="select"
-              onChange={(event) =>
-                setRuntimeConfig((current) =>
-                  applyPresetRuntimeConfig(current, event.target.value)
-                )
-              }
-              ref={presetSelectRef}
-              value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
-            >
-              {GEMMA_PRESETS.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.title}
-                </option>
-              ))}
-            </select>
+            <div className="detail-controls">
+              <label className="control-stack">
+                <span className="control-label">Model</span>
+                <select
+                  aria-label="Chat model"
+                  className="select"
+                  onChange={(event) =>
+                    setRuntimeConfig((current) => ({
+                      ...current,
+                      model: event.target.value,
+                    }))
+                  }
+                  value={runtimeConfig.model ?? ""}
+                >
+                  {(modelsQuery.data ?? []).map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.displayName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="control-stack">
+                <span className="control-label">Preset</span>
+                <select
+                  aria-label="Gemma preset"
+                  className="select"
+                  onChange={(event) =>
+                    setRuntimeConfig((current) =>
+                      applyPresetRuntimeConfig(current, event.target.value)
+                    )
+                  }
+                  ref={presetSelectRef}
+                  value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
+                >
+                  {GEMMA_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <p>{activePreset.description}</p>
             <dl className="stats-grid">
               <div>
@@ -1314,6 +1377,7 @@ export default function App() {
             aria-labelledby="command-palette-title"
             aria-modal="true"
             className="command-palette"
+            onMouseDown={(event) => event.stopPropagation()}
             role="dialog"
           >
             <div className="command-palette-header">
@@ -1341,8 +1405,14 @@ export default function App() {
             >
               <input
                 aria-label="Search commands"
+                aria-activedescendant={
+                  selectedCommand
+                    ? `command-item-${selectedCommand.id}`
+                    : undefined
+                }
                 className="command-palette-search"
                 onChange={(event) => setCommandQuery(event.target.value)}
+                onKeyDown={handleCommandPaletteKeyDown}
                 placeholder="Type a command or jump to a panel..."
                 ref={commandPaletteInputRef}
                 value={commandQuery}
@@ -1355,8 +1425,21 @@ export default function App() {
                     <p className="command-palette-group-label">{group}</p>
                     {commands.map((command) => (
                       <button
-                        className="command-item"
+                        className={`command-item ${
+                          selectedCommand?.id === command.id
+                            ? "is-selected"
+                            : ""
+                        }`}
+                        id={`command-item-${command.id}`}
                         key={command.id}
+                        onMouseEnter={() =>
+                          setCommandSelectionIndex(
+                            visibleCommandItems.findIndex(
+                              (visibleCommand) =>
+                                visibleCommand.id === command.id
+                            )
+                          )
+                        }
                         onClick={() => handleCommandSelection(command)}
                         type="button"
                       >
@@ -1376,6 +1459,15 @@ export default function App() {
                   No commands match that search.
                 </p>
               )}
+            </div>
+            <div className="command-palette-footer">
+              <span>
+                {visibleCommandItems.length} command
+                {visibleCommandItems.length === 1 ? "" : "s"}
+              </span>
+              <span>
+                <kbd>↑</kbd>/<kbd>↓</kbd> navigate · <kbd>Enter</kbd> run
+              </span>
             </div>
           </section>
         </div>

@@ -2,11 +2,15 @@ import {
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_FAST_PRESET_ID,
 } from "@gemma-agent-pwa/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPresetRuntimeConfig,
   buildMessages,
+  filterCommandItems,
   formatTime,
+  getNextFocusableIndex,
+  getPreferredTheme,
+  isEditableElement,
 } from "./app-utils";
 
 describe("buildMessages", () => {
@@ -49,6 +53,41 @@ describe("buildMessages", () => {
       },
     });
   });
+
+  it("hides the streaming assistant message when skill activity clears partial output", () => {
+    const messages = buildMessages(
+      {
+        sessionId: "session-1",
+        agentId: "release-planner",
+        title: "Release planning",
+        startedAt: "2026-04-06T21:00:00.000Z",
+        summary: "Release planning",
+        manifestPath: "agents/release-planner/history/session-1/SESSION.md",
+        turnCount: 1,
+        turns: [
+          {
+            messageId: "turn-1",
+            sender: "user",
+            createdAt: "2026-04-06T21:00:00.000Z",
+            bodyMarkdown: "Outline the release checklist.",
+            relativePath:
+              "agents/release-planner/history/session-1/turns/2026-04-06-user.md",
+          },
+        ],
+      },
+      {
+        sending: true,
+      }
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.turn.sender).toBe("user");
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("formatTime", () => {
@@ -87,5 +126,82 @@ describe("applyPresetRuntimeConfig", () => {
       temperature: 0.2,
       topP: 0.92,
     });
+  });
+});
+
+describe("getPreferredTheme", () => {
+  it("returns light when the browser prefers a light color scheme", () => {
+    const matchMedia = vi.fn().mockReturnValue({ matches: true });
+    vi.stubGlobal("window", { matchMedia });
+
+    expect(getPreferredTheme()).toBe("light");
+    expect(matchMedia).toHaveBeenCalledWith("(prefers-color-scheme: light)");
+  });
+
+  it("falls back to dark when no light preference is reported", () => {
+    vi.stubGlobal("window", {
+      matchMedia: vi.fn().mockReturnValue({ matches: false }),
+    });
+
+    expect(getPreferredTheme()).toBe("dark");
+  });
+});
+
+describe("filterCommandItems", () => {
+  const commands = [
+    {
+      label: "Go to chat",
+      description: "Focus the active conversation and composer.",
+      keywords: ["chat", "composer", "conversation"],
+    },
+    {
+      label: "Show model details",
+      description: "Toggle the advanced preset and model stats panel.",
+      keywords: ["model", "details", "preset", "settings"],
+    },
+  ];
+
+  it("returns all commands for a blank query", () => {
+    expect(filterCommandItems(commands, "")).toEqual(commands);
+  });
+
+  it("matches commands across labels, descriptions, and keywords", () => {
+    expect(filterCommandItems(commands, "composer")).toEqual([commands[0]]);
+    expect(filterCommandItems(commands, "advanced preset")).toEqual([
+      commands[1],
+    ]);
+    expect(filterCommandItems(commands, "settings")).toEqual([commands[1]]);
+  });
+});
+
+describe("getNextFocusableIndex", () => {
+  it("cycles through vertical lists with arrow keys", () => {
+    expect(getNextFocusableIndex(0, 3, "ArrowDown", "vertical")).toBe(1);
+    expect(getNextFocusableIndex(2, 3, "ArrowDown", "vertical")).toBe(0);
+    expect(getNextFocusableIndex(0, 3, "ArrowUp", "vertical")).toBe(2);
+  });
+
+  it("supports home and end navigation", () => {
+    expect(getNextFocusableIndex(1, 4, "Home", "horizontal")).toBe(0);
+    expect(getNextFocusableIndex(1, 4, "End", "horizontal")).toBe(3);
+  });
+});
+
+describe("isEditableElement", () => {
+  it("recognizes form fields as editable targets", () => {
+    class FakeElement {}
+    class FakeInput extends FakeElement {}
+    class FakeTextArea extends FakeElement {}
+    class FakeSelect extends FakeElement {}
+    class FakeButton extends FakeElement {}
+
+    vi.stubGlobal("HTMLElement", FakeElement);
+    vi.stubGlobal("HTMLInputElement", FakeInput);
+    vi.stubGlobal("HTMLTextAreaElement", FakeTextArea);
+    vi.stubGlobal("HTMLSelectElement", FakeSelect);
+
+    expect(isEditableElement(new FakeTextArea())).toBe(true);
+    expect(isEditableElement(new FakeSelect())).toBe(true);
+    expect(isEditableElement(new FakeButton())).toBe(false);
   });
 });
