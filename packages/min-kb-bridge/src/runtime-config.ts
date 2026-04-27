@@ -26,6 +26,10 @@ export function parsePersistedRuntimeConfig(
       parsed.maxCompletionTokens,
       "maxCompletionTokens"
     ),
+    contextWindowSize: readOptionalNumber(
+      parsed.contextWindowSize,
+      "contextWindowSize"
+    ),
     temperature: readOptionalNumber(parsed.temperature, "temperature"),
     topP: readOptionalNumber(parsed.topP, "topP"),
     disabledSkills: readOptionalStringArray(

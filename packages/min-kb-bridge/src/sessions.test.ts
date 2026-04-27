@@ -2,7 +2,14 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getSession, listSessions, saveChatTurn } from "./sessions.js";
+import {
+  deleteSession,
+  getSession,
+  listSessions,
+  restoreSession,
+  saveChatTurn,
+  softDeleteSession,
+} from "./sessions.js";
 import type { MinKbWorkspace } from "./workspace.js";
 
 const createdRoots: string[] = [];
@@ -72,6 +79,87 @@ describe("saveChatTurn", () => {
 });
 
 describe("listSessions", () => {
+  it("moves soft-deleted sessions into the deleted listing until restored", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+
+    const thread = await saveChatTurn(workspace, {
+      agentId: "release-planner",
+      sender: "user",
+      title: "Delete me later",
+      bodyMarkdown: "Archive this session.",
+    });
+
+    const deleted = await softDeleteSession(
+      workspace,
+      "release-planner",
+      thread.sessionId
+    );
+    expect(deleted.deletedAt).toBeTruthy();
+
+    const activeSessions = await listSessions(workspace, "release-planner");
+    expect(activeSessions).toHaveLength(0);
+
+    const deletedSessions = await listSessions(workspace, "release-planner", {
+      state: "deleted",
+    });
+    expect(deletedSessions).toHaveLength(1);
+    expect(deletedSessions[0]).toMatchObject({
+      sessionId: thread.sessionId,
+      deletedAt: deleted.deletedAt,
+    });
+
+    const deletedThread = await getSession(
+      workspace,
+      "release-planner",
+      thread.sessionId
+    );
+    expect(deletedThread.deletedAt).toBe(deleted.deletedAt);
+
+    await expect(
+      saveChatTurn(workspace, {
+        agentId: "release-planner",
+        sender: "assistant",
+        sessionId: thread.sessionId,
+        bodyMarkdown: "This should not be appended.",
+      })
+    ).rejects.toThrow(/deleted session/i);
+
+    const restored = await restoreSession(
+      workspace,
+      "release-planner",
+      thread.sessionId
+    );
+    expect(restored.deletedAt).toBeUndefined();
+    expect(await listSessions(workspace, "release-planner")).toHaveLength(1);
+    expect(
+      await listSessions(workspace, "release-planner", {
+        state: "deleted",
+      })
+    ).toHaveLength(0);
+  });
+
+  it("permanently deletes sessions from disk", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+
+    const thread = await saveChatTurn(workspace, {
+      agentId: "release-planner",
+      sender: "user",
+      title: "Delete forever",
+      bodyMarkdown: "Purge this session.",
+    });
+
+    await deleteSession(workspace, "release-planner", thread.sessionId);
+
+    expect(await listSessions(workspace, "release-planner")).toHaveLength(0);
+    await expect(
+      getSession(workspace, "release-planner", thread.sessionId)
+    ).rejects.toThrow(/session not found/i);
+  });
+
   it("normalizes legacy LM Studio runtime config aliases", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
     createdRoots.push(root);
@@ -88,6 +176,7 @@ describe("listSessions", () => {
         presetId: "gemma4-balanced",
         lmStudioEnableThinking: true,
         maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
         temperature: 0.2,
         topP: 0.95,
         disabledSkills: [],
@@ -103,6 +192,7 @@ describe("listSessions", () => {
           presetId: "gemma4-fast",
           lmStudioEnableThinking: false,
           maxCompletionTokens: 2048,
+          contextWindowSize: 8192,
           temperature: 0.2,
           topP: 0.92,
           disabledSkills: ["legacy-skill"],
@@ -121,6 +211,7 @@ describe("listSessions", () => {
       presetId: "gemma4-fast",
       lmStudioEnableThinking: false,
       maxCompletionTokens: 2048,
+      contextWindowSize: 8192,
       temperature: 0.2,
       topP: 0.92,
       disabledSkills: ["legacy-skill"],
@@ -143,6 +234,7 @@ describe("listSessions", () => {
         presetId: "gemma4-balanced",
         lmStudioEnableThinking: true,
         maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
         temperature: 0.2,
         topP: 0.95,
         disabledSkills: [],

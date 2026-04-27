@@ -122,15 +122,28 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
 }) => {
   await page.goto("/");
 
+  await expect(page.locator(".app-toolbar")).toBeHidden();
   await expect(
     page.getByRole("button", { name: /Command palette/i })
   ).toBeVisible();
-  await expect(page.getByText("Press / to focus the composer.")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /shortcuts and help/i })
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Agent console" })
   ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Model details" })
+  ).toHaveCount(0);
+
+  await page.getByRole("button", { name: /shortcuts and help/i }).click();
+  await expect(
+    page.getByRole("dialog", { name: "Shortcuts and quick tips" })
+  ).toBeVisible();
+  await expect(page.getByText("Jump to the composer.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("dialog", { name: "Shortcuts and quick tips" })
   ).toHaveCount(0);
 
   const initialTheme = await page.evaluate(
@@ -179,4 +192,73 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
   await expect(page.getByRole("button", { name: "Agents" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+});
+
+test("hides the details panel when closed and supports soft-deleting chat history", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Show details" }).click();
+  await expect(page.locator("#app-section-details")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Model details" })
+  ).toBeVisible();
+
+  await page
+    .locator("#app-section-details")
+    .getByRole("button", { name: "Hide details" })
+    .click();
+  await expect(page.locator("#app-section-details")).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Model details" })
+  ).toHaveCount(0);
+
+  await page
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "Details" })
+    .click();
+  await expect(page.locator("#app-section-details")).toBeVisible();
+  await page
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "Chat" })
+    .click();
+
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.fill("Create a thread so history actions are available.");
+  await composer.press("Control+Enter");
+  await expect(
+    page.locator(".message-card.assistant").last().getByText("mobile: wrapped")
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#app-section-chat")
+      .getByRole("button", { name: "Move to Trash" })
+  ).toBeVisible();
+
+  page.once("dialog", (dialog) => {
+    void dialog.accept();
+  });
+  await page
+    .locator("#app-section-chat")
+    .getByRole("button", { name: "Move to Trash" })
+    .click();
+
+  await expect(
+    page.getByText("Start a new thread for this agent to create local history.")
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Trash" }).click();
+  await page
+    .locator("#app-section-history .session-card-button")
+    .first()
+    .click();
+  await expect(
+    page.locator("#app-section-chat").getByRole("button", { name: "Restore" })
+  ).toBeVisible();
+  await expect(
+    page
+      .locator("#app-section-chat")
+      .getByRole("button", { name: "Delete forever" })
+  ).toBeVisible();
 });

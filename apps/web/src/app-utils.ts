@@ -62,6 +62,18 @@ export function buildMessages(
   ];
 }
 
+export function buildAppShellClassName(modelDetailsOpen: boolean): string {
+  return `app-shell ${
+    modelDetailsOpen ? "app-shell-details-open" : "app-shell-details-closed"
+  }`;
+}
+
+export function buildDetailPanelClassName(modelDetailsOpen: boolean): string {
+  return `panel detail-panel ${
+    modelDetailsOpen ? "detail-panel-visible" : "detail-panel-desktop-collapsed"
+  }`;
+}
+
 export function formatTime(timestamp?: string): string {
   if (!timestamp) {
     return "—";
@@ -84,6 +96,7 @@ export function applyPresetRuntimeConfig(
     presetId: preset.id,
     lmStudioEnableThinking: preset.lmStudioEnableThinking,
     maxCompletionTokens: preset.maxCompletionTokens,
+    contextWindowSize: preset.contextWindowSize,
     temperature: preset.temperature,
     topP: preset.topP,
   };

@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import {
-  __testing,
-  parseSkillCalls,
-  stripSkillCalls,
-} from "./skill-executor.js";
+import { __testing, parseSkillCalls, stripSkillCalls } from "./agent-skills.js";
 
-const { resolveInterpreter } = __testing;
+const {
+  buildExecutableSkillInstructions,
+  buildSkillsPromptSections,
+  buildCliArgsFromObject,
+  buildStructuredSkillInput,
+  extractSingleValuePositionalArg,
+  normalizeCliFlagName,
+  normalizeLegacyToolCallInput,
+  resolveInterpreter,
+  shouldRetryWithSinglePositionalArg,
+} = __testing;
 
 describe("parseSkillCalls", () => {
   it("extracts a single skill call from LLM output", () => {
@@ -37,6 +43,30 @@ And also:
       input: "package.json",
     });
     expect(calls[1]).toEqual({ skillName: "run-test", input: "npm test" });
+  });
+
+  it("extracts legacy agent-skills tool calls", () => {
+    const text = `I'll check that.
+
+<|tool_call>call:load-context{"topic":"gut-health"}<|tool_call|>`;
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      { skillName: "load-context", input: '{"topic":"gut-health"}' },
+    ]);
+  });
+
+  it("extracts malformed legacy agent-skills tool calls from thinking mode", () => {
+    const text = `<|tool_call>call:capture-wellness-note{body:<|"|>Running 2 to 3 times per week for approximately 40 minutes each session. Goal is to maintain a high metabolic rate.<|"|>,tag:exercise,topic:routine}<tool_call|>`;
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      {
+        skillName: "capture-wellness-note",
+        input:
+          '{"body":"Running 2 to 3 times per week for approximately 40 minutes each session. Goal is to maintain a high metabolic rate.","tag":"exercise","topic":"routine"}',
+      },
+    ]);
   });
 
   it("returns empty array when no skill calls present", () => {
@@ -83,6 +113,131 @@ After the call.`;
     const stripped = stripSkillCalls(text);
     expect(stripped).toBe("and");
   });
+
+  it("strips legacy agent-skills tool calls", () => {
+    const text = `Before
+
+<|tool_call>call:load-context{}<|tool_call|>
+
+After`;
+
+    expect(stripSkillCalls(text)).toBe("Before\n\n\n\nAfter");
+  });
+
+  it("strips malformed legacy agent-skills tool calls", () => {
+    const text = `Before
+
+<|tool_call>call:load-context{}<tool_call|>
+
+After`;
+
+    expect(stripSkillCalls(text)).toBe("Before\n\n\n\nAfter");
+  });
+});
+
+describe("normalizeLegacyToolCallInput", () => {
+  it("converts legacy key-value objects into JSON", () => {
+    const input =
+      '{body:<|"|>Metabolism-focused running routine.<|"|>,tag:exercise,priority:1,enabled:true}';
+
+    expect(normalizeLegacyToolCallInput(input)).toBe(
+      '{"body":"Metabolism-focused running routine.","tag":"exercise","priority":1,"enabled":true}'
+    );
+  });
+
+  it("unwraps legacy quoted strings", () => {
+    expect(normalizeLegacyToolCallInput('<|"|>plain text<|"|>')).toBe(
+      "plain text"
+    );
+  });
+});
+
+describe("structured skill input helpers", () => {
+  it("normalizes argument keys to kebab-case CLI flags", () => {
+    expect(normalizeCliFlagName("ensureParent")).toBe("--ensure-parent");
+    expect(normalizeCliFlagName("with_text")).toBe("--with-text");
+    expect(normalizeCliFlagName("date")).toBe("--date");
+  });
+
+  it("converts JSON object input into CLI arguments", () => {
+    expect(
+      buildCliArgsFromObject({
+        date: "today",
+        text: "Today is a holiday.",
+        ensureParent: true,
+        tags: ["holiday", "journal"],
+        draft: false,
+      })
+    ).toEqual([
+      "--date",
+      "today",
+      "--text",
+      "Today is a holiday.",
+      "--ensure-parent",
+      "--tags",
+      "holiday",
+      "--tags",
+      "journal",
+    ]);
+  });
+
+  it("only builds structured input metadata for JSON objects", () => {
+    expect(buildStructuredSkillInput("plain text")).toEqual({
+      args: [],
+      env: {},
+    });
+    expect(
+      buildStructuredSkillInput('{"date":"today","text":"Today is a holiday."}')
+    ).toEqual({
+      args: ["--date", "today", "--text", "Today is a holiday."],
+      env: {
+        SKILL_INPUT_JSON: '{"date":"today","text":"Today is a holiday."}',
+      },
+    });
+  });
+
+  it("extracts a fallback positional argument from single-field JSON objects", () => {
+    expect(extractSingleValuePositionalArg({ query: "TODO" })).toBe("TODO");
+    expect(extractSingleValuePositionalArg({ count: 3 })).toBe("3");
+    expect(
+      extractSingleValuePositionalArg({ query: "TODO", scope: "all" })
+    ).toBe(undefined);
+    expect(extractSingleValuePositionalArg({ query: ["TODO"] })).toBe(
+      undefined
+    );
+  });
+
+  it("retries single-field JSON input as a positional argument after argparse-style flag errors", () => {
+    expect(
+      shouldRetryWithSinglePositionalArg(
+        {
+          stdout: "",
+          stderr: "error: unrecognized arguments: --query\n",
+          exitCode: 2,
+          timedOut: false,
+        },
+        {
+          args: ["--query", "TODO"],
+          singleValuePositionalArg: "TODO",
+        }
+      )
+    ).toBe(true);
+
+    expect(
+      shouldRetryWithSinglePositionalArg(
+        {
+          stdout: "",
+          stderr: "Error: missing graph root",
+          exitCode: 1,
+          timedOut: false,
+        },
+        {
+          args: ["--query", "TODO"],
+          singleValuePositionalArg: "TODO",
+        }
+      )
+    ).toBe(false);
+  });
 });
 
 describe("resolveInterpreter", () => {
@@ -114,7 +269,7 @@ describe("resolveInterpreter", () => {
 
 describe("executeSkillScript", () => {
   it("returns error for skills without scripts", async () => {
-    const { executeSkillScript } = await import("./skill-executor.js");
+    const { executeSkillScript } = await import("./agent-skills.js");
     const skill = {
       name: "no-script",
       description: "A skill without a script",
@@ -128,5 +283,37 @@ describe("executeSkillScript", () => {
     const result = await executeSkillScript(skill, "test input");
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain("no executable script");
+  });
+});
+
+describe("skill prompt building", () => {
+  it("uses markdown body guidance instead of descriptor metadata", () => {
+    const skill = {
+      name: "release-notes",
+      description: "Hidden frontmatter description.",
+      scope: "agent-local" as const,
+      path: "/fake/SKILL.md",
+      sourceRoot: "/fake",
+      hasScript: true,
+      scriptPath: "/fake/run.sh",
+      content: [
+        "Use this skill to draft release notes from shipped changes.",
+        'Prefer JSON input like {"version":"1.2.3"} when the release number is known.',
+      ].join("\n\n"),
+    };
+
+    const sections = buildSkillsPromptSections([skill]);
+    const instructions = buildExecutableSkillInstructions([skill]);
+
+    expect(sections).toContain("Use this skill to draft release notes");
+    expect(sections).toContain("Prefer JSON input");
+    expect(sections).not.toContain("Hidden frontmatter description.");
+    expect(sections).not.toContain("Scope:");
+    expect(instructions).toContain("release-notes");
+    expect(instructions).toContain("Use this skill to draft release notes");
+    expect(instructions).not.toContain("Hidden frontmatter description.");
+    expect(instructions).toContain(
+      "When a skill needs a single free-form or positional input"
+    );
   });
 });

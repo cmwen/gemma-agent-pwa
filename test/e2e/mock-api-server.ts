@@ -87,8 +87,10 @@ const server = createServer(async (request, response) => {
   }
 
   if (method === "GET" && url.pathname === "/api/agents") {
+    const activeSessionCount =
+      completedSession && !completedSession.deletedAt ? 1 : 0;
     return writeJson(response, 200, [
-      { ...agent, sessionCount: completedSession ? 1 : 0 },
+      { ...agent, sessionCount: activeSessionCount },
     ]);
   }
 
@@ -97,11 +99,15 @@ const server = createServer(async (request, response) => {
   }
 
   if (method === "GET" && url.pathname === `/api/agents/${agent.id}/sessions`) {
-    return writeJson(
-      response,
-      200,
-      completedSession ? [toSessionSummary(completedSession)] : []
-    );
+    const state =
+      url.searchParams.get("state") === "deleted" ? "deleted" : "active";
+    const sessions =
+      completedSession &&
+      ((state === "deleted" && completedSession.deletedAt) ||
+        (state === "active" && !completedSession.deletedAt))
+        ? [toSessionSummary(completedSession)]
+        : [];
+    return writeJson(response, 200, sessions);
   }
 
   if (
@@ -111,6 +117,42 @@ const server = createServer(async (request, response) => {
       `/api/agents/${agent.id}/sessions/${completedSession.sessionId}`
   ) {
     return writeJson(response, 200, completedSession);
+  }
+
+  if (
+    method === "DELETE" &&
+    completedSession &&
+    url.pathname ===
+      `/api/agents/${agent.id}/sessions/${completedSession.sessionId}`
+  ) {
+    const mode =
+      url.searchParams.get("mode") === "permanent" ? "permanent" : "soft";
+    if (mode === "permanent") {
+      completedSession = undefined;
+    } else {
+      completedSession = {
+        ...completedSession,
+        deletedAt: new Date().toISOString(),
+      };
+    }
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+
+  if (
+    method === "POST" &&
+    completedSession &&
+    url.pathname ===
+      `/api/agents/${agent.id}/sessions/${completedSession.sessionId}/restore`
+  ) {
+    completedSession = {
+      ...completedSession,
+      deletedAt: undefined,
+    };
+    response.writeHead(204);
+    response.end();
+    return;
   }
 
   if (method === "POST" && url.pathname === `/api/agents/${agent.id}/chat`) {
@@ -276,6 +318,7 @@ function toSessionSummary(session: ChatSession): ChatSessionSummary {
     manifestPath: session.manifestPath,
     turnCount: session.turnCount,
     lastTurnAt: session.lastTurnAt,
+    deletedAt: session.deletedAt,
     runtimeConfig: session.runtimeConfig,
   };
 }

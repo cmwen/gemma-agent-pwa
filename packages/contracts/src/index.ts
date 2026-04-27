@@ -162,6 +162,12 @@ export const attachmentUploadSchema = z.object({
 });
 export type AttachmentUpload = z.infer<typeof attachmentUploadSchema>;
 
+export const sessionListStateSchema = z.enum(["active", "deleted", "all"]);
+export type SessionListState = z.infer<typeof sessionListStateSchema>;
+
+export const sessionDeleteModeSchema = z.enum(["soft", "permanent"]);
+export type SessionDeleteMode = z.infer<typeof sessionDeleteModeSchema>;
+
 export const storedAttachmentSchema = z.object({
   attachmentId: z.string().min(1),
   name: z.string().min(1),
@@ -214,6 +220,7 @@ export const chatSessionSummarySchema = z.object({
   manifestPath: z.string().min(1),
   turnCount: z.number().int().nonnegative(),
   lastTurnAt: z.string().optional(),
+  deletedAt: z.string().optional(),
   runtimeConfig: chatRuntimeConfigSchema.optional(),
   llmStats: llmSessionStatsSchema.optional(),
 });

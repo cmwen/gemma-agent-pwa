@@ -1,5 +1,6 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { LoadedSkillDocument } from "../../../packages/min-kb-bridge/src/agents.js";
 import {
   __testing,
   getLmStudioModelCatalog,
@@ -125,6 +126,106 @@ describe("lmstudio parsing", () => {
         outputTokens: 7,
       },
     });
+  });
+
+  it("surfaces SSE stream error messages from LM Studio", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                [
+                  "event: error",
+                  'data: {"message":"Prompt exceeds context length."}',
+                  "",
+                  "",
+                ].join("\n")
+              )
+            );
+            controller.close();
+          },
+        })
+      )
+    );
+
+    await expect(
+      streamLmStudioChat({
+        model: "google/gemma-3-4b",
+        config: {
+          provider: "lmstudio",
+          model: "google/gemma-3-4b",
+          presetId: "gemma4-balanced",
+          lmStudioEnableThinking: true,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          topP: 0.95,
+          disabledSkills: [],
+        },
+        conversation: [
+          {
+            messageId: "turn-1",
+            sender: "user",
+            createdAt: "2026-04-16T00:00:00.000Z",
+            bodyMarkdown: "Hello",
+            relativePath: "agents/test/history/session-1/turn-1.md",
+          },
+        ],
+        enabledSkills: [],
+        onSnapshot: vi.fn(),
+      })
+    ).rejects.toThrow("Prompt exceeds context length.");
+  });
+
+  it("keeps enabled skill summaries compact enough for smaller context windows", () => {
+    const longTail =
+      "Tail detail that should not fully survive truncation. ".repeat(80);
+    const prompt = __testing.buildSystemPrompt("Follow the agent contract.", [
+      {
+        name: "search-store",
+        description: "Search notes by title or content.",
+        scope: "agent-local",
+        path: "agents/logseq/skills/search-store/SKILL.md",
+        sourceRoot: "agents/logseq/skills",
+        hasScript: true,
+        scriptPath: "agents/logseq/skills/search-store/scripts/search_store.py",
+        content: [
+          "Search notes by title or content.",
+          'Use a JSON object like {"query":"weekly review","limit":5} when you need named arguments.',
+          longTail,
+        ].join("\n\n"),
+      } satisfies LoadedSkillDocument,
+    ]);
+
+    expect(prompt).toContain("### search-store");
+    expect(prompt).toContain("Search notes by title or content.");
+    expect(prompt).toContain(
+      'Use a JSON object like {"query":"weekly review","limit":5} when you need named arguments.'
+    );
+    expect(prompt).not.toContain(longTail);
+  });
+
+  it("does not send descriptor metadata for skills into the prompt", () => {
+    const prompt = __testing.buildSystemPrompt("Follow the agent contract.", [
+      {
+        name: "search-store",
+        description: "Hidden metadata description.",
+        scope: "agent-local",
+        path: "agents/logseq/skills/search-store/SKILL.md",
+        sourceRoot: "agents/logseq/skills",
+        hasScript: true,
+        scriptPath: "agents/logseq/skills/search-store/scripts/search_store.py",
+        content: [
+          "Search notes by title or content.",
+          'Use a JSON object like {"query":"weekly review"} when needed.',
+        ].join("\n\n"),
+      } satisfies LoadedSkillDocument,
+    ]);
+
+    expect(prompt).toContain("Search notes by title or content.");
+    expect(prompt).not.toContain("Hidden metadata description.");
+    expect(prompt).not.toContain("Scope:");
+    expect(prompt).not.toContain("Description:");
   });
 });
 

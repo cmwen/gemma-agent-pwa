@@ -8,6 +8,7 @@ import type {
 } from "@gemma-agent-pwa/contracts";
 import matter from "gray-matter";
 import { parsePersistedRuntimeConfig } from "./runtime-config.js";
+import { listSessions } from "./sessions.js";
 import {
   firstParagraph,
   normalizeAgentId,
@@ -25,6 +26,7 @@ const SKILL_SCRIPT_NAMES = [
   "run.ts",
   "run",
 ] as const;
+const SUPPORTED_SKILL_SCRIPT_EXTENSIONS = new Set([".sh", ".py", ".js", ".ts"]);
 
 interface MarkdownDocument {
   content: string;
@@ -82,7 +84,7 @@ export async function getAgentById(
     readMarkdownDocumentIfExists(soulPath),
     readRuntimeConfigIfExists(runtimeConfigPath),
     listSkillsForAgent(workspace, normalizedAgentId),
-    countAgentSessions(historyRoot),
+    countAgentSessions(workspace, normalizedAgentId),
   ]);
 
   const title =
@@ -243,7 +245,26 @@ async function findSkillScript(skillDir: string): Promise<string | undefined> {
       return candidate;
     }
   }
-  return undefined;
+
+  const scriptsDir = path.join(skillDir, "scripts");
+  if (!(await pathExists(scriptsDir))) {
+    return undefined;
+  }
+
+  const entries = await fs.readdir(scriptsDir, { withFileTypes: true });
+  const candidates = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(scriptsDir, entry.name))
+    .filter((candidate) => {
+      const extension = path.extname(candidate).toLowerCase();
+      return (
+        SUPPORTED_SKILL_SCRIPT_EXTENSIONS.has(extension) ||
+        path.basename(candidate) === "run"
+      );
+    })
+    .sort((left, right) => left.localeCompare(right));
+
+  return candidates.length === 1 ? candidates[0] : undefined;
 }
 
 async function readMarkdownDocument(
@@ -283,12 +304,9 @@ async function readRuntimeConfigIfExists(
   return parsePersistedRuntimeConfig(raw);
 }
 
-async function countAgentSessions(historyRoot: string): Promise<number> {
-  if (!(await pathExists(historyRoot))) {
-    return 0;
-  }
-
-  const files = await walkFiles(historyRoot);
-  return files.filter((filePath) => path.basename(filePath) === "SESSION.md")
-    .length;
+async function countAgentSessions(
+  workspace: MinKbWorkspace,
+  agentId: string
+): Promise<number> {
+  return (await listSessions(workspace, agentId)).length;
 }

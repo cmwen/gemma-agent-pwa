@@ -7,6 +7,10 @@ import type {
 } from "@gemma-agent-pwa/contracts";
 import { DEFAULT_CONTEXT_WINDOW_SIZE } from "@gemma-agent-pwa/contracts";
 import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
+import {
+  buildExecutableSkillInstructions,
+  buildSkillsPromptSections,
+} from "./agent-skills.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
 const DEFAULT_LOCALHOST_BASE_URL = "http://localhost:1234/v1";
@@ -23,6 +27,10 @@ interface LmStudioChatCompletionResponse {
   id?: string;
   created?: number;
   model?: string;
+  message?: string;
+  error?: {
+    message?: string;
+  };
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
@@ -290,46 +298,18 @@ function buildSystemPrompt(
   agentPrompt: string | undefined,
   enabledSkills: LoadedSkillDocument[]
 ): string | undefined {
-  const executableSkills = enabledSkills.filter((s) => s.hasScript);
-  const skillCallInstructions =
-    executableSkills.length > 0
-      ? [
-          "## Skill execution",
-          "",
-          "You have access to executable skills. To run a skill, emit a skill_call block:",
-          "",
-          "```",
-          '<skill_call name="skill-name">input for the skill</skill_call>',
-          "```",
-          "",
-          "The system will execute the skill and return its output. You may then continue reasoning.",
-          "Only call skills that are listed below as executable. You may call multiple skills in one response.",
-          "",
-          "### Executable skills",
-          ...executableSkills.map(
-            (skill) => `- **${skill.name}**: ${skill.description}`
-          ),
-        ].join("\n")
-      : undefined;
+  const skillCallInstructions = buildExecutableSkillInstructions(enabledSkills);
 
   const sections = [
     "You are running through LM Studio inside Gemma Agent PWA.",
     "Stay grounded in the current conversation and the provided agent instructions.",
-    executableSkills.length > 0
+    enabledSkills.some((skill) => skill.hasScript)
       ? undefined
       : "Do not imply tool execution, MCP access, or external system results unless they already appear in the conversation.",
     agentPrompt?.trim()
       ? `## Agent instructions\n\n${agentPrompt.trim()}`
       : undefined,
-    enabledSkills.length > 0
-      ? [
-          "## Enabled skills",
-          ...enabledSkills.map(
-            (skill) =>
-              `### ${skill.name}\n- Scope: ${skill.scope}\n- Description: ${skill.description}${skill.hasScript ? "\n- **Executable**: yes" : ""}\n\n${skill.content.trim()}`
-          ),
-        ].join("\n\n")
-      : undefined,
+    buildSkillsPromptSections(enabledSkills),
     skillCallInstructions,
   ].filter((section): section is string => Boolean(section?.trim()));
   return sections.length > 0 ? sections.join("\n\n") : undefined;
@@ -371,6 +351,10 @@ async function readChatCompletionStream(
     while (nextBlock) {
       const { block, rest } = nextBlock;
       buffer = rest;
+      const errorMessage = parseStreamError(block);
+      if (errorMessage) {
+        throw new Error(errorMessage);
+      }
       const chunk = parseStreamChunk(block);
       if (chunk && chunk !== "[DONE]") {
         mergeCompletionChunk(completion, chunk);
@@ -383,6 +367,10 @@ async function readChatCompletionStream(
     }
 
     if (done) {
+      const errorMessage = parseStreamError(buffer.trim());
+      if (errorMessage) {
+        throw new Error(errorMessage);
+      }
       const trailing = parseStreamChunk(buffer.trim());
       if (trailing && trailing !== "[DONE]") {
         mergeCompletionChunk(completion, trailing);
@@ -428,6 +416,35 @@ function extractNextStreamBlock(
     block: buffer.slice(0, boundary.index),
     rest: buffer.slice(boundary.index + boundary[0].length),
   };
+}
+
+function parseStreamError(block: string): string | undefined {
+  const trimmedBlock = block.trim();
+  if (!trimmedBlock) {
+    return undefined;
+  }
+
+  const eventName = trimmedBlock
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.startsWith("event:"))
+    ?.slice(6)
+    .trim()
+    .toLowerCase();
+  if (eventName !== "error") {
+    return undefined;
+  }
+
+  const payload = parseStreamChunk(trimmedBlock);
+  if (!payload || payload === "[DONE]") {
+    return "LM Studio returned a streaming error.";
+  }
+
+  return (
+    payload.message?.trim() ||
+    payload.error?.message?.trim() ||
+    "LM Studio returned a streaming error."
+  );
 }
 
 function parseStreamChunk(

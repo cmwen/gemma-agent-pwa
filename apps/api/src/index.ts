@@ -1,22 +1,25 @@
 import {
   type ChatRequest,
-  type ChatTurn,
   chatRequestSchema,
   chatStreamEventSchema,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
   mergeRuntimeConfig,
+  sessionDeleteModeSchema,
+  sessionListStateSchema,
 } from "@gemma-agent-pwa/contracts";
 import {
+  deleteSession,
   getAgentById,
   getSession,
   listAgents,
   listSessions,
-  loadEnabledSkillDocumentsForAgent,
   recordSessionLlmUsage,
   resolveWorkspace,
+  restoreSession,
   saveChatTurn,
+  softDeleteSession,
   summarizeWorkspace,
 } from "@gemma-agent-pwa/min-kb-bridge";
 import { serve } from "@hono/node-server";
@@ -24,16 +27,15 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamText } from "hono/streaming";
 import { getDetectedWebOrigins, splitCsv } from "../../../scripts/network.js";
+import { loadAgentSkills } from "./agent-skills.js";
 import {
-  getLmStudioModelCatalog,
-  listLmStudioModels,
-  streamLmStudioChat,
-} from "./lmstudio.js";
-import {
-  executeSkillScript,
-  parseSkillCalls,
-  stripSkillCalls,
-} from "./skill-executor.js";
+  buildChatRequestDebugLog,
+  buildChatStreamDebugLog,
+  buildSkillInventoryDebugLog,
+  logChatDebugMessage,
+} from "./chat-debug.js";
+import { runChatLoop } from "./chat-loop.js";
+import { getLmStudioModelCatalog, listLmStudioModels } from "./lmstudio.js";
 
 const workspace = await resolveWorkspace();
 const app = new Hono();
@@ -45,7 +47,7 @@ app.use(
   cors({
     origin: (origin) => (isAllowedCorsOrigin(origin) ? origin : null),
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
   })
 );
 
@@ -93,8 +95,11 @@ app.get("/api/agents/:agentId", async (context) => {
 });
 
 app.get("/api/agents/:agentId/sessions", async (context) => {
+  const state = sessionListStateSchema.parse(
+    context.req.query("state") ?? "active"
+  );
   return context.json(
-    await listSessions(workspace, context.req.param("agentId"))
+    await listSessions(workspace, context.req.param("agentId"), { state })
   );
 });
 
@@ -108,7 +113,37 @@ app.get("/api/agents/:agentId/sessions/:sessionId", async (context) => {
   );
 });
 
-const MAX_SKILL_LOOP_ITERATIONS = 5;
+app.delete("/api/agents/:agentId/sessions/:sessionId", async (context) => {
+  const mode = sessionDeleteModeSchema.parse(
+    context.req.query("mode") ?? "soft"
+  );
+  if (mode === "soft") {
+    await softDeleteSession(
+      workspace,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    );
+  } else {
+    await deleteSession(
+      workspace,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    );
+  }
+  return context.body(null, 204);
+});
+
+app.post(
+  "/api/agents/:agentId/sessions/:sessionId/restore",
+  async (context) => {
+    await restoreSession(
+      workspace,
+      context.req.param("agentId"),
+      context.req.param("sessionId")
+    );
+    return context.body(null, 204);
+  }
+);
 
 app.post("/api/agents/:agentId/chat", async (context) => {
   const agentId = context.req.param("agentId");
@@ -147,15 +182,44 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     sessionId: existingThread?.sessionId ?? request.sessionId,
     runtimeConfig: mergedConfig,
   });
-  const enabledSkills = await loadEnabledSkillDocumentsForAgent(
+  const enabledSkills = await loadAgentSkills(
     workspace,
     agentId,
     mergedConfig.disabledSkills
   );
+  logChatDebugMessage(
+    buildChatRequestDebugLog({
+      agentId,
+      sessionId: userThread.sessionId,
+      title,
+      prompt,
+      runtimeConfig: mergedConfig,
+    })
+  );
+  logChatDebugMessage(
+    buildSkillInventoryDebugLog(
+      {
+        agentId,
+        sessionId: userThread.sessionId,
+      },
+      {
+        executableSkillCount: enabledSkills.filter((skill) => skill.hasScript)
+          .length,
+        skillNames: enabledSkills.map((skill) => skill.name),
+      }
+    )
+  );
 
   return streamText(context, async (stream) => {
     const sendEvent = async (event: unknown) => {
-      await stream.writeln(JSON.stringify(chatStreamEventSchema.parse(event)));
+      const parsedEvent = chatStreamEventSchema.parse(event);
+      logChatDebugMessage(
+        buildChatStreamDebugLog(parsedEvent, {
+          agentId,
+          sessionId: userThread.sessionId,
+        })
+      );
+      await stream.writeln(JSON.stringify(parsedEvent));
     };
     let pendingWrite = Promise.resolve();
     const queueEvent = (event: unknown) => {
@@ -169,130 +233,35 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         thread: userThread,
       });
 
-      const conversationTurns: ChatTurn[] = [...userThread.turns];
-      let finalAssistantText = "";
-      let finalThinkingText: string | undefined;
-      const totalLlmStats = {
-        recordedAt: new Date().toISOString(),
-        model: mergedConfig.model,
-        requestCount: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-        durationMs: 0,
-      };
-
-      for (
-        let iteration = 0;
-        iteration < MAX_SKILL_LOOP_ITERATIONS;
-        iteration++
-      ) {
-        const result = await streamLmStudioChat({
-          model: mergedConfig.model,
-          config: mergedConfig,
-          conversation: conversationTurns,
-          agentPrompt: agent.combinedPrompt,
-          enabledSkills,
-          onSnapshot: (snapshot) => {
-            void queueEvent({
-              type: "assistant_snapshot",
-              ...snapshot,
-            });
-          },
-        });
-
-        totalLlmStats.requestCount += result.llmStats.requestCount;
-        totalLlmStats.inputTokens += result.llmStats.inputTokens;
-        totalLlmStats.outputTokens += result.llmStats.outputTokens;
-        totalLlmStats.durationMs += result.llmStats.durationMs;
-
-        const skillCalls = parseSkillCalls(result.assistantText);
-        if (skillCalls.length === 0) {
-          finalAssistantText = result.assistantText;
-          finalThinkingText = result.thinkingText;
-          break;
-        }
-
-        // Execute skill calls and feed results back
-        const assistantTextWithoutCalls = stripSkillCalls(result.assistantText);
-        conversationTurns.push({
-          messageId: `loop-assistant-${iteration}`,
-          sender: "assistant",
-          createdAt: new Date().toISOString(),
-          bodyMarkdown: result.assistantText,
-          relativePath: "in-flight",
-        });
-
-        for (const call of skillCalls) {
-          const skill = enabledSkills.find(
-            (s) => s.name === call.skillName && s.hasScript
-          );
-
-          await queueEvent({
-            type: "skill_call",
-            skillName: call.skillName,
-            skillInput: call.input,
-          });
-
-          let skillResult: {
-            skillName: string;
-            output: string;
-            exitCode: number;
-          };
-          if (skill) {
-            skillResult = await executeSkillScript(skill, call.input);
-          } else {
-            skillResult = {
-              skillName: call.skillName,
-              output: `Skill "${call.skillName}" is not available or has no executable script.`,
-              exitCode: 1,
-            };
-          }
-
-          await queueEvent({
-            type: "skill_result",
-            skillName: skillResult.skillName,
-            skillOutput: skillResult.output,
-            exitCode: skillResult.exitCode,
-          });
-
-          conversationTurns.push({
-            messageId: `loop-tool-${iteration}-${call.skillName}`,
-            sender: "tool",
-            createdAt: new Date().toISOString(),
-            bodyMarkdown: `[Skill result: ${call.skillName} (exit code ${skillResult.exitCode})]\n\n${skillResult.output}`,
-            relativePath: "in-flight",
-          });
-        }
-
-        // If this was the last iteration, use whatever we have
-        if (iteration === MAX_SKILL_LOOP_ITERATIONS - 1) {
-          finalAssistantText =
-            assistantTextWithoutCalls || result.assistantText;
-          finalThinkingText = result.thinkingText;
-        }
-      }
-
-      if (!finalAssistantText) {
-        throw new Error("LM Studio returned no assistant message content.");
-      }
+      const loopResult = await runChatLoop({
+        agentId,
+        agentPrompt: agent.combinedPrompt,
+        config: mergedConfig,
+        conversationTurns: userThread.turns,
+        enabledSkills,
+        sessionId: userThread.sessionId,
+        emitEvent: queueEvent,
+      });
 
       const completedThread = await saveChatTurn(workspace, {
         agentId,
         sender: "assistant",
-        bodyMarkdown: finalAssistantText,
-        thinkingMarkdown: finalThinkingText,
+        bodyMarkdown: loopResult.assistantText,
+        thinkingMarkdown: loopResult.thinkingText,
         title: userThread.title,
         sessionId: userThread.sessionId,
         runtimeConfig: mergedConfig,
-        summary: summarizeThread(finalAssistantText),
+        summary: summarizeThread(loopResult.assistantText),
       });
       const llmStatsWithRate = {
-        ...totalLlmStats,
-        ...(totalLlmStats.outputTokens > 0 && totalLlmStats.durationMs > 0
+        ...loopResult.llmStats,
+        ...(loopResult.llmStats.outputTokens > 0 &&
+        loopResult.llmStats.durationMs > 0
           ? {
               tokensPerSecond: Number(
                 (
-                  (totalLlmStats.outputTokens / totalLlmStats.durationMs) *
+                  (loopResult.llmStats.outputTokens /
+                    loopResult.llmStats.durationMs) *
                   1000
                 ).toFixed(2)
               ),

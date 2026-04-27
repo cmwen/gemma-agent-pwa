@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getAgentById } from "./agents.js";
+import {
+  getAgentById,
+  listSkillsForAgent,
+  loadEnabledSkillDocumentsForAgent,
+} from "./agents.js";
 import type { MinKbWorkspace } from "./workspace.js";
 
 const createdRoots: string[] = [];
@@ -26,6 +30,7 @@ describe("getAgentById", () => {
       presetId: "gemma4-fast",
       lmStudioEnableThinking: false,
       maxCompletionTokens: 2048,
+      contextWindowSize: 8192,
       temperature: 0.2,
       topP: 0.92,
       disabledSkills: ["legacy-skill"],
@@ -39,6 +44,7 @@ describe("getAgentById", () => {
       presetId: "gemma4-fast",
       lmStudioEnableThinking: false,
       maxCompletionTokens: 2048,
+      contextWindowSize: 8192,
       temperature: 0.2,
       topP: 0.92,
       disabledSkills: ["legacy-skill"],
@@ -58,6 +64,162 @@ describe("getAgentById", () => {
 
     const agent = await getAgentById(workspace, "release-planner");
     expect(agent?.runtimeConfig).toBeUndefined();
+  });
+
+  it("keeps SOUL and AGENT frontmatter out of the combined prompt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    const defaultRoot = path.join(workspace.agentsRoot, "default");
+    const agentRoot = path.join(workspace.agentsRoot, "release-planner");
+
+    await Promise.all([
+      mkdir(defaultRoot, { recursive: true }),
+      mkdir(agentRoot, { recursive: true }),
+      mkdir(workspace.memoryRoot, { recursive: true }),
+      mkdir(workspace.skillsRoot, { recursive: true }),
+      mkdir(workspace.copilotSkillsRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        path.join(defaultRoot, "SOUL.md"),
+        "---\nowner: hidden\n---\nBe calm and pragmatic.\n",
+        "utf8"
+      ),
+      writeFile(
+        path.join(agentRoot, "AGENT.md"),
+        "---\ntitle: Release Planner\nmetadata: hidden\n---\nPlan releases with concrete milestones.\n",
+        "utf8"
+      ),
+    ]);
+
+    const agent = await getAgentById(workspace, "release-planner");
+
+    expect(agent?.combinedPrompt).toContain("Be calm and pragmatic.");
+    expect(agent?.combinedPrompt).toContain(
+      "Plan releases with concrete milestones."
+    );
+    expect(agent?.combinedPrompt).not.toContain("owner: hidden");
+    expect(agent?.combinedPrompt).not.toContain("metadata: hidden");
+  });
+});
+
+describe("listSkillsForAgent", () => {
+  it("detects a single executable script in the standard scripts directory", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    await createAgentFixture(workspace, {});
+
+    const skillRoot = path.join(
+      workspace.agentsRoot,
+      "release-planner",
+      "skills",
+      "release-notes"
+    );
+    await mkdir(path.join(skillRoot, "scripts"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(skillRoot, "SKILL.md"),
+        "---\nname: release-notes\ndescription: Draft release notes.\n---\nUse this skill for release notes.\n",
+        "utf8"
+      ),
+      writeFile(
+        path.join(skillRoot, "scripts", "generate.sh"),
+        '#!/bin/bash\necho "notes"',
+        { mode: 0o755 }
+      ),
+    ]);
+
+    const skills = await listSkillsForAgent(workspace, "release-planner");
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: "release-notes",
+        hasScript: true,
+        scriptPath: path.join(skillRoot, "scripts", "generate.sh"),
+      }),
+    ]);
+  });
+
+  it("treats multiple scripts in the scripts directory as non-executable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    await createAgentFixture(workspace, {});
+
+    const skillRoot = path.join(
+      workspace.agentsRoot,
+      "release-planner",
+      "skills",
+      "release-notes"
+    );
+    await mkdir(path.join(skillRoot, "scripts"), { recursive: true });
+    await Promise.all([
+      writeFile(
+        path.join(skillRoot, "SKILL.md"),
+        "---\nname: release-notes\ndescription: Draft release notes.\n---\nUse this skill for release notes.\n",
+        "utf8"
+      ),
+      writeFile(
+        path.join(skillRoot, "scripts", "generate.sh"),
+        '#!/bin/bash\necho "notes"',
+        { mode: 0o755 }
+      ),
+      writeFile(
+        path.join(skillRoot, "scripts", "cleanup.py"),
+        'print("cleanup")',
+        "utf8"
+      ),
+    ]);
+
+    const skills = await listSkillsForAgent(workspace, "release-planner");
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: "release-notes",
+        hasScript: false,
+      }),
+    ]);
+  });
+});
+
+describe("loadEnabledSkillDocumentsForAgent", () => {
+  it("strips markdown frontmatter from skill content", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    await createAgentFixture(workspace, {});
+
+    const skillRoot = path.join(
+      workspace.agentsRoot,
+      "release-planner",
+      "skills",
+      "release-notes"
+    );
+    await mkdir(skillRoot, { recursive: true });
+    await writeFile(
+      path.join(skillRoot, "SKILL.md"),
+      [
+        "---",
+        "name: release-notes",
+        "description: Hidden metadata should stay out of the prompt.",
+        "---",
+        "Draft release notes from the latest shipped changes.",
+      ].join("\n"),
+      "utf8"
+    );
+
+    const skills = await loadEnabledSkillDocumentsForAgent(
+      workspace,
+      "release-planner"
+    );
+
+    expect(skills).toEqual([
+      expect.objectContaining({
+        name: "release-notes",
+        content: "Draft release notes from the latest shipped changes.",
+      }),
+    ]);
+    expect(skills[0]?.content).not.toContain("Hidden metadata");
   });
 });
 

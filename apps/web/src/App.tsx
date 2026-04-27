@@ -9,7 +9,10 @@ import {
 } from "@gemma-agent-pwa/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useMemo,
   useRef,
@@ -19,6 +22,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   applyPresetRuntimeConfig,
+  buildAppShellClassName,
+  buildDetailPanelClassName,
   buildMessages,
   buildStreamConsoleEntry,
   filterCommandItems,
@@ -73,6 +78,7 @@ interface StreamConsoleEntryViewModel {
 type MobileSection = "agents" | "history" | "chat" | "details";
 type HistoryView = "active" | "deleted";
 type SessionAction = "soft-delete" | "restore" | "permanent-delete";
+type ResizablePanel = "agents" | "history";
 
 const MOBILE_SECTIONS: Array<{ id: MobileSection; label: string }> = [
   { id: "chat", label: "Chat" },
@@ -80,6 +86,22 @@ const MOBILE_SECTIONS: Array<{ id: MobileSection; label: string }> = [
   { id: "history", label: "History" },
   { id: "details", label: "Details" },
 ];
+const DESKTOP_BREAKPOINT = 981;
+const DESKTOP_PANEL_GAP = 16;
+const MIN_CHAT_PANEL_WIDTH = 420;
+const RESIZE_STEP = 24;
+const PANEL_WIDTH_LIMITS = {
+  agents: {
+    defaultWidth: 280,
+    min: 220,
+    max: 420,
+  },
+  history: {
+    defaultWidth: 280,
+    min: 240,
+    max: 520,
+  },
+} as const;
 
 export default function App() {
   const queryClient = useQueryClient();
@@ -102,8 +124,13 @@ export default function App() {
   const [historyView, setHistoryView] = useState<HistoryView>("active");
   const [mobileSection, setMobileSection] = useState<MobileSection>("chat");
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [isHelpOpen, setHelpOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandSelectionIndex, setCommandSelectionIndex] = useState(0);
+  const [desktopPanelWidths, setDesktopPanelWidths] = useState({
+    agents: PANEL_WIDTH_LIMITS.agents.defaultWidth,
+    history: PANEL_WIDTH_LIMITS.history.defaultWidth,
+  });
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
@@ -117,14 +144,19 @@ export default function App() {
     action: SessionAction;
   }>();
   const abortRef = useRef<AbortController | null>(null);
+  const appShellRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const newChatButtonRef = useRef<HTMLButtonElement | null>(null);
   const recentHistoryButtonRef = useRef<HTMLButtonElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const chatDetailsToggleRef = useRef<HTMLButtonElement | null>(null);
   const modelDetailsToggleRef = useRef<HTMLButtonElement | null>(null);
   const presetSelectRef = useRef<HTMLSelectElement | null>(null);
   const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
+  const helpCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+  const activeResizePanelRef = useRef<ResizablePanel | null>(null);
+  const desktopPanelWidthsRef = useRef(desktopPanelWidths);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -246,6 +278,8 @@ export default function App() {
         agentConfig?.lmStudioEnableThinking,
       maxCompletionTokens:
         sessionConfig?.maxCompletionTokens ?? agentConfig?.maxCompletionTokens,
+      contextWindowSize:
+        sessionConfig?.contextWindowSize ?? agentConfig?.contextWindowSize,
       temperature: sessionConfig?.temperature ?? agentConfig?.temperature,
       topP: sessionConfig?.topP ?? agentConfig?.topP,
     });
@@ -330,6 +364,15 @@ export default function App() {
         run: () => handleNewChat(),
       },
       {
+        id: "open-help",
+        label: "Show shortcuts and help",
+        description: "Open the keyboard shortcut list and quick usage tips.",
+        group: "Actions",
+        keywords: ["help", "shortcuts", "keyboard", "tips"],
+        shortcut: "?",
+        run: () => openHelpDialog(),
+      },
+      {
         id: "toggle-history-view",
         label:
           historyView === "active"
@@ -348,9 +391,9 @@ export default function App() {
       },
       {
         id: "toggle-model-details",
-        label: modelDetailsOpen ? "Hide agent details" : "Show agent details",
+        label: modelDetailsOpen ? "Hide details panel" : "Show details panel",
         description:
-          "Toggle the full agent detail rail, including console logs.",
+          "Toggle the full details rail, including console logs and model settings.",
         group: "Actions",
         keywords: [
           "agent",
@@ -371,7 +414,7 @@ export default function App() {
         description: "Flip the app theme and persist it locally.",
         group: "Actions",
         keywords: ["theme", "light", "dark", "appearance"],
-        run: () => setThemeMode(getNextTheme(themeMode)),
+        run: () => handleThemeToggle(),
       },
     ],
     [historyView, modelDetailsOpen, themeMode]
@@ -393,6 +436,10 @@ export default function App() {
     [visibleCommandItems]
   );
   const selectedCommand = visibleCommandItems[commandSelectionIndex];
+
+  useEffect(() => {
+    desktopPanelWidthsRef.current = desktopPanelWidths;
+  }, [desktopPanelWidths]);
 
   useEffect(() => {
     const timeline = timelineRef.current;
@@ -419,6 +466,13 @@ export default function App() {
   }, [isCommandPaletteOpen]);
 
   useEffect(() => {
+    if (!isHelpOpen) {
+      return;
+    }
+    requestAnimationFrame(() => helpCloseButtonRef.current?.focus());
+  }, [isHelpOpen]);
+
+  useEffect(() => {
     if (!isCommandPaletteOpen) {
       setCommandSelectionIndex(0);
       return;
@@ -431,7 +485,72 @@ export default function App() {
     });
   }, [isCommandPaletteOpen, visibleCommandItems.length]);
 
+  useEffect(() => {
+    function syncDesktopPanelWidths() {
+      if (
+        typeof window === "undefined" ||
+        window.innerWidth < DESKTOP_BREAKPOINT
+      ) {
+        return;
+      }
+      setDesktopPanelWidths((current) => {
+        const normalized = normalizeDesktopPanelWidths(current);
+        return normalized.agents === current.agents &&
+          normalized.history === current.history
+          ? current
+          : normalized;
+      });
+    }
+
+    syncDesktopPanelWidths();
+    window.addEventListener("resize", syncDesktopPanelWidths);
+    return () => window.removeEventListener("resize", syncDesktopPanelWidths);
+  }, [modelDetailsOpen]);
+
+  useEffect(() => {
+    function stopPanelResize() {
+      if (!activeResizePanelRef.current) {
+        return;
+      }
+      activeResizePanelRef.current = null;
+      document.body.classList.remove("is-resizing-panels");
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (
+        !activeResizePanelRef.current ||
+        !appShellRef.current ||
+        window.innerWidth < DESKTOP_BREAKPOINT
+      ) {
+        return;
+      }
+      const shellBounds = appShellRef.current.getBoundingClientRect();
+      const pointerOffset = event.clientX - shellBounds.left;
+      if (activeResizePanelRef.current === "agents") {
+        updateDesktopPanelWidth("agents", pointerOffset);
+        return;
+      }
+      updateDesktopPanelWidth(
+        "history",
+        pointerOffset - desktopPanelWidthsRef.current.agents - DESKTOP_PANEL_GAP
+      );
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopPanelResize);
+    window.addEventListener("pointercancel", stopPanelResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopPanelResize);
+      window.removeEventListener("pointercancel", stopPanelResize);
+      document.body.classList.remove("is-resizing-panels");
+    };
+  }, [modelDetailsOpen]);
+
   function focusSection(section: MobileSection) {
+    if (section === "details" && !modelDetailsOpen) {
+      setModelDetailsOpen(true);
+    }
     setMobileSection(section);
     requestAnimationFrame(() => {
       switch (section) {
@@ -456,6 +575,7 @@ export default function App() {
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    setHelpOpen(false);
     setCommandQuery("");
     setCommandPaletteOpen(true);
   }
@@ -469,12 +589,116 @@ export default function App() {
     requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
   }
 
+  function openHelpDialog() {
+    lastFocusedElementRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setCommandPaletteOpen(false);
+    setHelpOpen(true);
+  }
+
+  function closeHelpDialog(options?: { restoreFocus?: boolean }) {
+    setHelpOpen(false);
+    if (options?.restoreFocus === false) {
+      return;
+    }
+    requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
+  }
+
+  function handleThemeToggle() {
+    setThemeMode(getNextTheme(themeMode));
+  }
+
+  function getDesktopDetailWidth() {
+    return window.innerWidth <= 1280 ? 280 : 320;
+  }
+
+  function clampDesktopPanelWidth(
+    panel: ResizablePanel,
+    nextWidth: number,
+    widths = desktopPanelWidthsRef.current
+  ) {
+    const limits = PANEL_WIDTH_LIMITS[panel];
+    let maxWidth = limits.max;
+    const shellWidth = appShellRef.current?.clientWidth;
+    if (shellWidth) {
+      const otherPanelWidth =
+        panel === "agents" ? widths.history : widths.agents;
+      const detailWidth = modelDetailsOpen ? getDesktopDetailWidth() : 0;
+      const gapCount = modelDetailsOpen ? 3 : 2;
+      const availableWidth =
+        shellWidth -
+        otherPanelWidth -
+        detailWidth -
+        MIN_CHAT_PANEL_WIDTH -
+        gapCount * DESKTOP_PANEL_GAP;
+      maxWidth = Math.min(maxWidth, availableWidth);
+    }
+    return Math.min(
+      Math.max(Math.round(nextWidth), limits.min),
+      Math.max(limits.min, maxWidth)
+    );
+  }
+
+  function normalizeDesktopPanelWidths(widths: typeof desktopPanelWidths) {
+    const agents = clampDesktopPanelWidth("agents", widths.agents, widths);
+    const history = clampDesktopPanelWidth("history", widths.history, {
+      ...widths,
+      agents,
+    });
+    return { agents, history };
+  }
+
+  function updateDesktopPanelWidth(panel: ResizablePanel, nextWidth: number) {
+    setDesktopPanelWidths((current) => {
+      const normalized = normalizeDesktopPanelWidths({
+        ...current,
+        [panel]: clampDesktopPanelWidth(panel, nextWidth, current),
+      });
+      return normalized.agents === current.agents &&
+        normalized.history === current.history
+        ? current
+        : normalized;
+    });
+  }
+
+  function startPanelResize(
+    panel: ResizablePanel,
+    event: ReactPointerEvent<HTMLButtonElement>
+  ) {
+    if (window.innerWidth < DESKTOP_BREAKPOINT) {
+      return;
+    }
+    event.preventDefault();
+    activeResizePanelRef.current = panel;
+    document.body.classList.add("is-resizing-panels");
+  }
+
+  function handlePanelResizerKeyDown(
+    panel: ResizablePanel,
+    event: ReactKeyboardEvent<HTMLButtonElement>
+  ) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return;
+    }
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? -RESIZE_STEP : RESIZE_STEP;
+    updateDesktopPanelWidth(
+      panel,
+      desktopPanelWidthsRef.current[panel] + delta
+    );
+  }
+
   function handleModelDetailsToggle(nextOpen: boolean) {
     setModelDetailsOpen(nextOpen);
     if (nextOpen) {
-      focusSection("details");
+      setMobileSection("details");
       requestAnimationFrame(() => presetSelectRef.current?.focus());
+      return;
     }
+    setMobileSection("chat");
+    requestAnimationFrame(() => chatDetailsToggleRef.current?.focus());
   }
 
   function appendConsoleEntry(
@@ -591,10 +815,25 @@ export default function App() {
         closeCommandPalette();
         return;
       }
+      if (event.key === "Escape" && isHelpOpen) {
+        event.preventDefault();
+        closeHelpDialog();
+        return;
+      }
       if (isEditableElement(event.target)) {
         return;
       }
-      if (isCommandPaletteOpen) {
+      if (isCommandPaletteOpen || isHelpOpen) {
+        return;
+      }
+      if (
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.key === "?"
+      ) {
+        event.preventDefault();
+        openHelpDialog();
         return;
       }
       if (
@@ -620,7 +859,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleGlobalKeydown);
     return () => window.removeEventListener("keydown", handleGlobalKeydown);
-  }, [isCommandPaletteOpen]);
+  }, [isCommandPaletteOpen, isHelpOpen]);
 
   async function handleSend() {
     if (!selectedAgentId || !draft.trim() || threadDeleted) {
@@ -819,14 +1058,74 @@ export default function App() {
     }
   }
 
+  function renderSessionActionButtons(session: ChatSessionSummary) {
+    if (session.deletedAt) {
+      return (
+        <>
+          <button
+            className="secondary-button session-action-button"
+            disabled={Boolean(pendingSessionAction)}
+            onClick={() => void handleSessionAction(session, "restore")}
+            type="button"
+          >
+            {pendingSessionAction?.sessionId === session.sessionId &&
+            pendingSessionAction.action === "restore"
+              ? "Restoring..."
+              : "Restore"}
+          </button>
+          <button
+            className="danger-button session-action-button"
+            disabled={Boolean(pendingSessionAction)}
+            onClick={() =>
+              void handleSessionAction(session, "permanent-delete")
+            }
+            type="button"
+          >
+            {pendingSessionAction?.sessionId === session.sessionId &&
+            pendingSessionAction.action === "permanent-delete"
+              ? "Deleting..."
+              : "Delete forever"}
+          </button>
+        </>
+      );
+    }
+
+    return (
+      <button
+        className="secondary-button session-action-button"
+        disabled={Boolean(pendingSessionAction)}
+        onClick={() => void handleSessionAction(session, "soft-delete")}
+        type="button"
+      >
+        {pendingSessionAction?.sessionId === session.sessionId &&
+        pendingSessionAction.action === "soft-delete"
+          ? "Moving..."
+          : "Move to Trash"}
+      </button>
+    );
+  }
+
+  const desktopShellStyle = useMemo(
+    () =>
+      ({
+        "--agents-panel-width": `${desktopPanelWidths.agents}px`,
+        "--history-panel-width": `${desktopPanelWidths.history}px`,
+      }) as CSSProperties,
+    [desktopPanelWidths]
+  );
+
   return (
-    <div className="app-shell">
+    <div
+      className={buildAppShellClassName(modelDetailsOpen)}
+      ref={appShellRef}
+      style={desktopShellStyle}
+    >
       <div className="app-toolbar">
         <div className="toolbar-brand">
           <span className="toolbar-brand-title">Gemma Agent PWA</span>
           <p className="toolbar-brand-copy">
-            Local-first chat with quick keyboard actions and advanced model
-            controls tucked away until you need them.
+            Local-first chat, quick actions, and everything else tucked behind
+            help when you need it.
           </p>
         </div>
         <button
@@ -837,42 +1136,42 @@ export default function App() {
           type="button"
         >
           <span className="command-trigger-copy">
-            <span className="command-trigger-title">Command palette</span>
+            <span className="command-trigger-title">Quick actions</span>
             <span className="command-trigger-subtitle">
-              Jump between panels, switch views, and toggle agent details.
+              Jump panels, switch history views, and toggle details.
             </span>
           </span>
           <kbd>Ctrl/Cmd+K</kbd>
         </button>
-        <div className="toolbar-meta">
-          <div className="toolbar-metric">
-            <span>Status</span>
-            <strong>{status}</strong>
-          </div>
-          <div className="toolbar-metric">
-            <span>Agent</span>
-            <strong>{selectedAgent?.title ?? "Loading agents"}</strong>
-          </div>
-          <div className="toolbar-metric">
-            <span>Model</span>
-            <strong>
-              {selectedModel?.displayName ?? runtimeConfig.model ?? "No model"}
-            </strong>
-          </div>
-          <p className="keyboard-hint">
-            Press / to focus the composer. Alt+1-4 jumps between panels.
-          </p>
-          <button
-            aria-label={`Switch to ${
-              themeMode === "dark" ? "light" : "dark"
-            } theme`}
-            className="secondary-button theme-toggle"
-            onClick={() => setThemeMode(getNextTheme(themeMode))}
-            type="button"
+        <div className="toolbar-actions">
+          <span className={`status-chip status-${status.toLowerCase()}`}>
+            {status}
+          </span>
+          <IconButton label="Open shortcuts and help" onClick={openHelpDialog}>
+            <HelpIcon />
+          </IconButton>
+          <IconButton
+            label={`Switch to ${themeMode === "dark" ? "light" : "dark"} theme`}
+            onClick={handleThemeToggle}
           >
-            Theme: {themeMode === "dark" ? "Dark" : "Light"}
-          </button>
+            {themeMode === "dark" ? <SunIcon /> : <MoonIcon />}
+          </IconButton>
         </div>
+      </div>
+
+      <div className="mobile-utility-bar">
+        <IconButton label="Open command palette" onClick={openCommandPalette}>
+          <CommandIcon />
+        </IconButton>
+        <IconButton label="Open shortcuts and help" onClick={openHelpDialog}>
+          <HelpIcon />
+        </IconButton>
+        <IconButton
+          label={`Switch to ${themeMode === "dark" ? "light" : "dark"} theme`}
+          onClick={handleThemeToggle}
+        >
+          {themeMode === "dark" ? <SunIcon /> : <MoonIcon />}
+        </IconButton>
       </div>
 
       <nav
@@ -941,6 +1240,14 @@ export default function App() {
             </button>
           ))}
         </div>
+        <button
+          aria-controls="app-section-agents"
+          aria-label="Resize agents panel"
+          className="panel-resizer"
+          onKeyDown={(event) => handlePanelResizerKeyDown("agents", event)}
+          onPointerDown={(event) => startPanelResize("agents", event)}
+          type="button"
+        />
       </aside>
 
       <aside
@@ -1030,50 +1337,7 @@ export default function App() {
                 </span>
               </button>
               <div className="session-card-actions">
-                {session.deletedAt ? (
-                  <>
-                    <button
-                      className="secondary-button"
-                      disabled={Boolean(pendingSessionAction)}
-                      onClick={() =>
-                        void handleSessionAction(session, "restore")
-                      }
-                      type="button"
-                    >
-                      {pendingSessionAction?.sessionId === session.sessionId &&
-                      pendingSessionAction.action === "restore"
-                        ? "Restoring..."
-                        : "Restore"}
-                    </button>
-                    <button
-                      className="danger-button"
-                      disabled={Boolean(pendingSessionAction)}
-                      onClick={() =>
-                        void handleSessionAction(session, "permanent-delete")
-                      }
-                      type="button"
-                    >
-                      {pendingSessionAction?.sessionId === session.sessionId &&
-                      pendingSessionAction.action === "permanent-delete"
-                        ? "Deleting..."
-                        : "Delete forever"}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="ghost-button"
-                    disabled={Boolean(pendingSessionAction)}
-                    onClick={() =>
-                      void handleSessionAction(session, "soft-delete")
-                    }
-                    type="button"
-                  >
-                    {pendingSessionAction?.sessionId === session.sessionId &&
-                    pendingSessionAction.action === "soft-delete"
-                      ? "Deleting..."
-                      : "Delete"}
-                  </button>
-                )}
+                {renderSessionActionButtons(session)}
               </div>
             </article>
           ))}
@@ -1087,6 +1351,14 @@ export default function App() {
             </div>
           )}
         </div>
+        <button
+          aria-controls="app-section-history"
+          aria-label="Resize history panel"
+          className="panel-resizer"
+          onKeyDown={(event) => handlePanelResizerKeyDown("history", event)}
+          onPointerDown={(event) => startPanelResize("history", event)}
+          type="button"
+        />
       </aside>
 
       <main
@@ -1155,15 +1427,21 @@ export default function App() {
                 </button>
               </fieldset>
               <button
-                aria-controls="agent-details-content"
+                aria-controls="app-section-details"
                 aria-expanded={modelDetailsOpen}
                 className="ghost-button"
                 onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
+                ref={chatDetailsToggleRef}
                 type="button"
               >
                 {modelDetailsOpen ? "Hide details" : "Show details"}
               </button>
             </div>
+            {thread ? (
+              <div className="chat-thread-actions">
+                {renderSessionActionButtons(thread)}
+              </div>
+            ) : null}
           </div>
         </header>
 
@@ -1253,31 +1531,31 @@ export default function App() {
         </footer>
       </main>
 
-      <aside
-        className={buildPanelClassName(
-          "panel detail-panel",
-          "details",
-          mobileSection
-        )}
-        id="app-section-details"
-      >
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">Details</p>
-            <h2>{agentDetailQuery.data?.title ?? "No agent selected"}</h2>
+      {modelDetailsOpen ? (
+        <aside
+          className={buildPanelClassName(
+            buildDetailPanelClassName(modelDetailsOpen),
+            "details",
+            mobileSection
+          )}
+          id="app-section-details"
+        >
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Details</p>
+              <h2>{agentDetailQuery.data?.title ?? "No agent selected"}</h2>
+            </div>
+            <button
+              aria-controls="app-section-details"
+              aria-expanded={modelDetailsOpen}
+              className="ghost-button"
+              onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
+              ref={modelDetailsToggleRef}
+              type="button"
+            >
+              {modelDetailsOpen ? "Hide details" : "Show details"}
+            </button>
           </div>
-          <button
-            aria-controls="agent-details-content"
-            aria-expanded={modelDetailsOpen}
-            className="ghost-button"
-            onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
-            ref={modelDetailsToggleRef}
-            type="button"
-          >
-            {modelDetailsOpen ? "Hide details" : "Show details"}
-          </button>
-        </div>
-        {modelDetailsOpen ? (
           <div className="detail-panel-content" id="agent-details-content">
             <section className="detail-section">
               <h3>Agent</h3>
@@ -1409,6 +1687,13 @@ export default function App() {
                   </dd>
                 </div>
                 <div>
+                  <dt>Context window</dt>
+                  <dd>
+                    {runtimeConfig.contextWindowSize ??
+                      activePreset.contextWindowSize}
+                  </dd>
+                </div>
+                <div>
                   <dt>Temperature</dt>
                   <dd>
                     {runtimeConfig.temperature ?? activePreset.temperature}
@@ -1443,8 +1728,90 @@ export default function App() {
               </dl>
             </section>
           </div>
-        ) : null}
-      </aside>
+        </aside>
+      ) : null}
+      {isHelpOpen ? (
+        <div className="dialog-overlay">
+          <section
+            aria-labelledby="help-dialog-title"
+            aria-modal="true"
+            className="help-dialog"
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="help-dialog-header">
+              <div>
+                <p className="eyebrow">Help</p>
+                <h2 id="help-dialog-title">Shortcuts and quick tips</h2>
+              </div>
+              <button
+                className="ghost-button"
+                onClick={() => closeHelpDialog()}
+                ref={helpCloseButtonRef}
+                type="button"
+              >
+                Close <kbd>Esc</kbd>
+              </button>
+            </div>
+            <div className="help-dialog-content">
+              <section className="help-dialog-section">
+                <h3>Keyboard shortcuts</h3>
+                <dl className="shortcut-list">
+                  <div>
+                    <dt>
+                      <kbd>Ctrl/Cmd+K</kbd>
+                    </dt>
+                    <dd>Open quick actions.</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>/</kbd>
+                    </dt>
+                    <dd>Jump to the composer.</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>Alt+1-4</kbd>
+                    </dt>
+                    <dd>Move between chat, agents, history, and details.</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>N</kbd>
+                    </dt>
+                    <dd>Start a new chat for the selected agent.</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <kbd>?</kbd>
+                    </dt>
+                    <dd>Open this help sheet.</dd>
+                  </div>
+                </dl>
+              </section>
+              <section className="help-dialog-section">
+                <h3>Quick tips</h3>
+                <ul className="help-list">
+                  <li>
+                    Drag the handles beside Agents and History on desktop.
+                  </li>
+                  <li>
+                    Fast and Think only change reasoning mode; the preset stays
+                    in place.
+                  </li>
+                  <li>
+                    Details holds model settings and the live tool-call console.
+                  </li>
+                  <li>
+                    Move chats to Trash first, then restore or delete them
+                    forever later.
+                  </li>
+                </ul>
+              </section>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {isCommandPaletteOpen ? (
         <div className="command-palette-overlay">
           <section
@@ -1573,6 +1940,67 @@ function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
         </details>
       ) : null}
     </article>
+  );
+}
+
+function IconButton(props: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      aria-label={props.label}
+      className="icon-button"
+      onClick={props.onClick}
+      type="button"
+    >
+      {props.children}
+    </button>
+  );
+}
+
+function CommandIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M4 7.5a3.5 3.5 0 0 1 7 0V10h2V7.5a3.5 3.5 0 1 1 3.5 3.5H14v2h2.5a3.5 3.5 0 1 1-3.5 3.5V14h-2v2.5a3.5 3.5 0 1 1-3.5-3.5H10v-2H7.5A3.5 3.5 0 0 1 4 7.5Zm3.5-1.5a1.5 1.5 0 1 0 0 3H10V7.5A1.5 1.5 0 0 0 7.5 6Zm9 0A1.5 1.5 0 0 0 15 7.5V9h1.5a1.5 1.5 0 1 0 0-3Zm0 9H15v1.5a1.5 1.5 0 1 0 1.5-1.5Zm-9 0a1.5 1.5 0 1 0 1.5 1.5V15H7.5Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function HelpIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M12 3.5a8.5 8.5 0 1 1 0 17a8.5 8.5 0 0 1 0-17Zm0 2a6.5 6.5 0 1 0 0 13a6.5 6.5 0 0 0 0-13Zm0 9.75a1.12 1.12 0 1 1 0 2.25a1.12 1.12 0 0 1 0-2.25Zm.1-7a3.3 3.3 0 0 1 2.28.77c.6.5.95 1.23.95 2.09c0 .7-.21 1.27-.62 1.75c-.3.34-.63.6-.95.82c-.51.35-.76.58-.86.74c-.1.14-.15.34-.15.68v.3h-2v-.42c0-.68.12-1.23.4-1.66c.28-.42.69-.77 1.22-1.12c.28-.2.5-.37.65-.54c.2-.24.31-.49.31-.87c0-.3-.11-.55-.35-.75c-.25-.2-.56-.3-.93-.3c-.44 0-.79.12-1.02.35c-.25.23-.4.56-.45 1.02H8.58c.05-.98.4-1.77 1.02-2.35c.62-.57 1.45-.86 2.5-.86Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M14.9 4.1a7.83 7.83 0 0 0 4.99 12.47a.75.75 0 0 1 .42 1.34a9.67 9.67 0 1 1-5.4-16.48a.75.75 0 0 1 0 1.5Zm-2.35.96a8.17 8.17 0 1 0 5.86 11.26a9.34 9.34 0 0 1-5.86-11.26Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function SunIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <path
+        d="M12 5.25A.75.75 0 0 1 12.75 6v1.25a.75.75 0 0 1-1.5 0V6a.75.75 0 0 1 .75-.75Zm0 11.5a.75.75 0 0 1 .75.75v1.25a.75.75 0 0 1-1.5 0V17.5a.75.75 0 0 1 .75-.75Zm6-4.75a.75.75 0 0 1 .75-.75H20a.75.75 0 0 1 0 1.5h-1.25A.75.75 0 0 1 18 12Zm-14 0a.75.75 0 0 1 .75-.75H6a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 12Zm10.3-4.05a.75.75 0 0 1 1.06 0l.88.88a.75.75 0 0 1-1.06 1.06l-.88-.88a.75.75 0 0 1 0-1.06Zm-6.72 6.72a.75.75 0 0 1 1.06 0l.88.88a.75.75 0 0 1-1.06 1.06l-.88-.88a.75.75 0 0 1 0-1.06Zm7.78 1.94a.75.75 0 0 1 0-1.06l.88-.88a.75.75 0 1 1 1.06 1.06l-.88.88a.75.75 0 0 1-1.06 0Zm-6.72-6.72a.75.75 0 0 1 0-1.06l.88-.88a.75.75 0 1 1 1.06 1.06l-.88.88a.75.75 0 0 1-1.06 0ZM12 8.25a3.75 3.75 0 1 1 0 7.5a3.75 3.75 0 0 1 0-7.5Zm0 1.5a2.25 2.25 0 1 0 0 4.5a2.25 2.25 0 0 0 0-4.5Z"
+        fill="currentColor"
+      />
+    </svg>
   );
 }
 

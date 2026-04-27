@@ -9,6 +9,7 @@ import type {
   ChatTurn,
   LlmRequestStats,
   LlmSessionStats,
+  SessionListState,
   StoredAttachment,
   TurnSender,
 } from "@gemma-agent-pwa/contracts";
@@ -59,8 +60,12 @@ export interface SaveChatTurnInput {
 
 export async function listSessions(
   workspace: MinKbWorkspace,
-  agentId: string
+  agentId: string,
+  options?: {
+    state?: SessionListState;
+  }
 ): Promise<ChatSessionSummary[]> {
+  const state = options?.state ?? "active";
   const historyRoot = historyRootForAgent(workspace, agentId);
   const manifests = (await walkFiles(historyRoot)).filter(
     (filePath) => path.basename(filePath) === "SESSION.md"
@@ -69,9 +74,13 @@ export async function listSessions(
     manifests.map((manifestPath) => readSessionSummary(workspace, manifestPath))
   );
 
-  return sessions.sort((left, right) =>
-    right.startedAt.localeCompare(left.startedAt)
-  );
+  return sessions
+    .filter((session) => matchesSessionListState(session, state))
+    .sort((left, right) =>
+      sortSessionTimestamp(right, state).localeCompare(
+        sortSessionTimestamp(left, state)
+      )
+    );
 }
 
 export async function getSession(
@@ -114,6 +123,11 @@ export async function saveChatTurn(
     startedAt: input.startedAt ?? createdAt,
     summary: input.summary,
   });
+  if (session.deletedAt) {
+    throw new Error(
+      `Cannot append turns to deleted session ${session.sessionId} for agent ${session.agentId}`
+    );
+  }
 
   const sender = senderSchema.parse(input.sender);
   const turnsRoot = path.join(
@@ -191,10 +205,69 @@ export async function updateSessionSummary(
       session.agentId,
       session.title,
       session.startedAt,
-      summary
+      summary,
+      session.deletedAt
     ),
     "utf8"
   );
+}
+
+export async function softDeleteSession(
+  workspace: MinKbWorkspace,
+  agentId: string,
+  sessionId: string
+): Promise<ChatSessionSummary> {
+  const manifestPath = await findSessionManifest(workspace, agentId, sessionId);
+  if (!manifestPath) {
+    throw new Error(
+      `Cannot delete missing session ${sessionId} for agent ${agentId}`
+    );
+  }
+
+  const session = await parseSessionManifest(workspace, manifestPath);
+  const deletedAt = session.deletedAt ?? new Date().toISOString();
+  await fs.writeFile(
+    manifestPath,
+    renderSessionManifest(
+      session.sessionId,
+      session.agentId,
+      session.title,
+      session.startedAt,
+      session.summary,
+      deletedAt
+    ),
+    "utf8"
+  );
+
+  return readSessionSummary(workspace, manifestPath);
+}
+
+export async function restoreSession(
+  workspace: MinKbWorkspace,
+  agentId: string,
+  sessionId: string
+): Promise<ChatSessionSummary> {
+  const manifestPath = await findSessionManifest(workspace, agentId, sessionId);
+  if (!manifestPath) {
+    throw new Error(
+      `Cannot restore missing session ${sessionId} for agent ${agentId}`
+    );
+  }
+
+  const session = await parseSessionManifest(workspace, manifestPath);
+  await fs.writeFile(
+    manifestPath,
+    renderSessionManifest(
+      session.sessionId,
+      session.agentId,
+      session.title,
+      session.startedAt,
+      session.summary
+    ),
+    "utf8"
+  );
+
+  return readSessionSummary(workspace, manifestPath);
 }
 
 export async function deleteSession(
@@ -310,7 +383,7 @@ async function parseSessionManifest(
 ): Promise<
   Omit<
     ChatSessionSummary,
-    "turnCount" | "lastTurnAt" | "runtimeConfig" | "manifestPath"
+    "turnCount" | "lastTurnAt" | "runtimeConfig" | "llmStats" | "manifestPath"
   >
 > {
   const raw = await fs.readFile(manifestPath, "utf8");
@@ -347,6 +420,7 @@ async function parseSessionManifest(
   const sessionId = metadata.get("session_id");
   const agentId = metadata.get("agent");
   const startedAt = metadata.get("started");
+  const deletedAt = metadata.get("deleted_at");
   if (!title || !sessionId || !agentId || !startedAt) {
     throw new Error(`Incomplete session metadata in ${manifestPath}`);
   }
@@ -364,6 +438,7 @@ async function parseSessionManifest(
     title,
     startedAt,
     summary: summary.trim() || DEFAULT_SUMMARY,
+    ...(deletedAt ? { deletedAt } : {}),
   };
 }
 
@@ -464,13 +539,15 @@ function renderSessionManifest(
   agentId: string,
   title: string,
   startedAt: string,
-  summary: string
+  summary: string,
+  deletedAt?: string
 ): string {
   const manifest = [
     `${SESSION_HEADER}${title}`,
     `Session ID: ${sessionId}`,
     `Agent: ${agentId}`,
     `Started: ${startedAt}`,
+    ...(deletedAt ? [`Deleted At: ${deletedAt}`] : []),
     `Schema: ${CHAT_HISTORY_SCHEMA}`,
     "Rendering: Sort `turns/*.md` lexically and render each file in order.",
     "Storage Model: Session metadata stays in this file. Each turn is an immutable Markdown file under `turns`.",
@@ -481,6 +558,27 @@ function renderSessionManifest(
   ].join("\n");
 
   return ensureTrailingNewline(manifest);
+}
+
+function matchesSessionListState(
+  session: ChatSessionSummary,
+  state: SessionListState
+): boolean {
+  if (state === "all") {
+    return true;
+  }
+  const isDeleted = Boolean(session.deletedAt);
+  return state === "deleted" ? isDeleted : !isDeleted;
+}
+
+function sortSessionTimestamp(
+  session: ChatSessionSummary,
+  state: SessionListState
+): string {
+  if (state === "deleted") {
+    return session.deletedAt ?? session.lastTurnAt ?? session.startedAt;
+  }
+  return session.lastTurnAt ?? session.startedAt;
 }
 
 function renderTurn(

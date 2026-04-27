@@ -5,6 +5,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPresetRuntimeConfig,
+  buildAppShellClassName,
+  buildDetailPanelClassName,
   buildMessages,
   buildStreamConsoleEntry,
   filterCommandItems,
@@ -86,6 +88,26 @@ describe("buildMessages", () => {
   });
 });
 
+describe("desktop layout helpers", () => {
+  it("drops the details column from the shell when the rail is closed", () => {
+    expect(buildAppShellClassName(true)).toBe(
+      "app-shell app-shell-details-open"
+    );
+    expect(buildAppShellClassName(false)).toBe(
+      "app-shell app-shell-details-closed"
+    );
+  });
+
+  it("marks the details rail as collapsed only when it should be hidden", () => {
+    expect(buildDetailPanelClassName(true)).toBe(
+      "panel detail-panel detail-panel-visible"
+    );
+    expect(buildDetailPanelClassName(false)).toBe(
+      "panel detail-panel detail-panel-desktop-collapsed"
+    );
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -114,6 +136,7 @@ describe("applyPresetRuntimeConfig", () => {
           presetId: GEMMA_BALANCED_PRESET_ID,
           lmStudioEnableThinking: true,
           maxCompletionTokens: 4096,
+          contextWindowSize: 32768,
           temperature: 0.2,
           topP: 0.95,
         },
@@ -124,6 +147,7 @@ describe("applyPresetRuntimeConfig", () => {
       presetId: GEMMA_FAST_PRESET_ID,
       lmStudioEnableThinking: false,
       maxCompletionTokens: 2048,
+      contextWindowSize: 32768,
       temperature: 0.2,
       topP: 0.92,
     });

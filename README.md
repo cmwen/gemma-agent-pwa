@@ -48,6 +48,12 @@ When `LM_STUDIO_BASE_URL` is unset, the API now tries `127.0.0.1`, `localhost`,
 and the current machine hostname (for example `minipc-wsl`) before reporting LM
 Studio as offline.
 
+Gemma 4 may support a much larger theoretical context window than the value LM
+Studio actually loads for a specific model session. If LM Studio reports errors
+like `n_keep >= n_ctx`, increase the model's loaded context length in LM Studio
+or reduce this app's prompt plus completion budget to fit inside the active
+`n_ctx`.
+
 Optional API CORS overrides for a GitHub Pages-hosted frontend:
 
 ```bash
@@ -66,11 +72,22 @@ pnpm build
 pnpm lint
 ```
 
+## Usability
+
+- The web UI now supports **light and dark themes** with a persistent theme toggle.
+- Keyboard navigation is built into the section jump controls, toggle groups, agent/session lists, and composer.
+- Shortcuts: press `/` to focus the composer, `Ctrl`/`Cmd` + `Enter` to send, and `Alt` + `1` through `4` to jump between **Agents**, **History**, **Chat**, and **Details**.
+- The mobile layout keeps section navigation visible and the composer pinned near the bottom of the active panel for easier one-handed use.
+
 `pnpm dev` now picks a matched free web/API port pair automatically, then prints
 the selected URLs before launching both processes. In dev, the browser stays on
 same-origin `/api` requests and Vite proxies them to the selected API port, so
 hostname URLs like `http://minipc-wsl:55008/` keep working. This also avoids the
 shared environment collisions around `55006` and `8787`.
+
+The API now mirrors chat debug events into the `pnpm dev` terminal output, so
+you can inspect each request, tool call, tool result, stream error, and saved
+response without relying on the in-app details panel.
 
 If you run the apps separately, the defaults are still `http://localhost:55006`
 for the web app and `http://localhost:8787` for the API. The Vite dev server
@@ -89,5 +106,8 @@ The repository includes a GitHub Actions workflow that publishes `apps/web/dist`
 ## Notes
 
 - Agent prompts are composed from `AGENT.md`, `SOUL.md`, and enabled skill documents in `min-kb-store`.
+- Skills remain file-based `SKILL.md` bundles; executable skills can use the legacy top-level `run.*` convention or a single script inside `scripts/` for compatibility with the open Agent Skills layout.
+- Structured JSON skill-call bodies are forwarded to executable skills through stdin/env and translated into CLI flags like `--field value` for better compatibility with legacy scripts; single-field JSON inputs can also fall back to a positional argument when a skill rejects unknown flags.
+- The API skill loop now strips transient tool-call/planning text from the live chat, supports legacy Agent Skills `<|tool_call|>` blocks, and re-prompts for a plain-language final answer after skill results.
 - Sessions are stored in the canonical `SESSION.md` + `turns/*.md` format.
 - Assistant thinking is stored alongside turn metadata but only shown behind an explicit disclosure in the UI.
