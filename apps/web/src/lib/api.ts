@@ -6,6 +6,8 @@ import type {
   ChatStreamEvent,
   HealthStatus,
   ModelDescriptor,
+  SessionDeleteMode,
+  SessionListState,
 } from "@gemma-agent-pwa/contracts";
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -27,10 +29,11 @@ export async function getAgent(agentId: string): Promise<AgentSummary> {
 }
 
 export async function getSessions(
-  agentId: string
+  agentId: string,
+  state: SessionListState = "active"
 ): Promise<ChatSessionSummary[]> {
   return fetchJson<ChatSessionSummary[]>(
-    `${API_ROOT}/agents/${agentId}/sessions`
+    `${API_ROOT}/agents/${agentId}/sessions?state=${encodeURIComponent(state)}`
   );
 }
 
@@ -41,6 +44,28 @@ export async function getSession(
   return fetchJson<ChatSession>(
     `${API_ROOT}/agents/${agentId}/sessions/${sessionId}`
   );
+}
+
+export async function deleteSession(
+  agentId: string,
+  sessionId: string,
+  mode: SessionDeleteMode
+): Promise<void> {
+  await fetchOk(
+    `${API_ROOT}/agents/${agentId}/sessions/${sessionId}?mode=${encodeURIComponent(mode)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
+export async function restoreSession(
+  agentId: string,
+  sessionId: string
+): Promise<void> {
+  await fetchOk(`${API_ROOT}/agents/${agentId}/sessions/${sessionId}/restore`, {
+    method: "POST",
+  });
 }
 
 export async function streamChat(
@@ -98,4 +123,11 @@ async function fetchJson<T>(url: string): Promise<T> {
     throw new Error(`Request failed with status ${response.status}.`);
   }
   return (await response.json()) as T;
+}
+
+async function fetchOk(url: string, init?: RequestInit): Promise<void> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}.`);
+  }
 }
