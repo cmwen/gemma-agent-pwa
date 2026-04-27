@@ -692,11 +692,70 @@ kbd {
   border-top: 1px solid var(--surface-border-faint);
 }
 
+.detail-panel-content {
+  overflow: auto;
+}
+
 .detail-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
   margin-top: 0.9rem;
+}
+
+.console-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.console-entry {
+  padding: 0.85rem;
+  border: 1px solid var(--surface-border-soft);
+  border-radius: 0.95rem;
+  background: var(--panel-bg-soft);
+}
+
+.console-entry.tone-success {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--surface-border));
+}
+
+.console-entry.tone-error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.console-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.console-entry-header strong {
+  color: var(--text-primary);
+}
+
+.console-entry-payload {
+  margin-top: 0.7rem;
+}
+
+.console-entry-payload summary {
+  cursor: pointer;
+  color: var(--accent-text);
+}
+
+.console-entry-payload pre {
+  overflow-x: auto;
+  margin: 0.7rem 0 0;
+  padding: 0.85rem;
+  border-radius: 0.85rem;
+  background: var(--code-bg-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .detail-hint {

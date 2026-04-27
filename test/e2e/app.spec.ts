@@ -8,7 +8,7 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${mockApiBaseUrl}/api/test/reset`);
 });
 
-test("streams Gemma Fast replies cleanly on mobile without horizontal overflow", async ({
+test("streams quick replies cleanly on mobile without horizontal overflow", async ({
   page,
 }) => {
   await page.goto("/");
@@ -28,7 +28,7 @@ test("streams Gemma Fast replies cleanly on mobile without horizontal overflow",
     chatPanel.getByText("Streaming reply for google/gemma-4b-it")
   ).toBeVisible();
   await expect(chatPanel.getByText("thinking: off")).toBeVisible();
-  await expect(chatPanel.getByText("tokens: 2048")).toBeVisible();
+  await expect(chatPanel.getByText("tokens: 4096")).toBeVisible();
   await expect(
     chatPanel.getByRole("cell", { name: "Mobile friendly" })
   ).toBeVisible();
@@ -86,6 +86,37 @@ test("keeps reasoning traces readable on mobile after the final assistant respon
   expect(overflowMetrics.body).toBeLessThanOrEqual(1);
 });
 
+test("uses the thinking toggle without overwriting the selected preset budget", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Show details" }).click();
+  await page.getByLabel("Gemma preset").selectOption("gemma4-deep");
+  await page.getByRole("button", { name: "Chat" }).click();
+  await page.getByRole("button", { name: "Fast" }).click();
+
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.fill("Use the deep preset budget with thinking disabled.");
+  await composer.press("Control+Enter");
+
+  const assistantCard = page.locator(".message-card.assistant").last();
+  await expect(
+    assistantCard.getByText("Streaming reply for google/gemma-4b-it")
+  ).toBeVisible();
+  await expect(assistantCard.getByText("thinking: off")).toBeVisible();
+  await expect(assistantCard.getByText("tokens: 8192")).toBeVisible();
+  await page
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "Details" })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Agent console" })
+  ).toBeVisible();
+  await expect(page.getByText("Request queued")).toBeVisible();
+  await expect(page.getByText("Response saved")).toBeVisible();
+});
+
 test("persists theme changes and supports keyboard shortcuts on mobile", async ({
   page,
 }) => {
@@ -95,6 +126,9 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
     page.getByRole("button", { name: /Command palette/i })
   ).toBeVisible();
   await expect(page.getByText("Press / to focus the composer.")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Agent console" })
+  ).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Model details" })
   ).toHaveCount(0);
@@ -132,7 +166,10 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
     0
   );
 
-  await page.getByRole("button", { name: "Model details" }).click();
+  await page.getByRole("button", { name: "Show details" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Agent console" })
+  ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Model details" })
   ).toBeVisible();

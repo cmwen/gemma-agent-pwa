@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPresetRuntimeConfig,
   buildMessages,
+  buildStreamConsoleEntry,
   filterCommandItems,
   formatTime,
   getNextFocusableIndex,
@@ -155,9 +156,9 @@ describe("filterCommandItems", () => {
       keywords: ["chat", "composer", "conversation"],
     },
     {
-      label: "Show model details",
-      description: "Toggle the advanced preset and model stats panel.",
-      keywords: ["model", "details", "preset", "settings"],
+      label: "Show agent details",
+      description: "Toggle the full agent detail rail, including console logs.",
+      keywords: ["agent", "details", "model", "status", "console", "settings"],
     },
   ];
 
@@ -167,10 +168,38 @@ describe("filterCommandItems", () => {
 
   it("matches commands across labels, descriptions, and keywords", () => {
     expect(filterCommandItems(commands, "composer")).toEqual([commands[0]]);
-    expect(filterCommandItems(commands, "advanced preset")).toEqual([
-      commands[1],
-    ]);
+    expect(filterCommandItems(commands, "console logs")).toEqual([commands[1]]);
     expect(filterCommandItems(commands, "settings")).toEqual([commands[1]]);
+  });
+});
+
+describe("buildStreamConsoleEntry", () => {
+  it("formats tool call events for the agent console", () => {
+    expect(
+      buildStreamConsoleEntry(
+        {
+          type: "skill_call",
+          skillName: "search-store",
+          skillInput: "release notes",
+        },
+        "2026-04-27T05:00:00.000Z"
+      )
+    ).toEqual({
+      id: "2026-04-27T05:00:00.000Z-skill-call-search-store",
+      summary: "Tool call · search-store",
+      detail: "release notes",
+      timestamp: "2026-04-27T05:00:00.000Z",
+      tone: "info",
+    });
+  });
+
+  it("ignores assistant snapshots so the console stays compact", () => {
+    expect(
+      buildStreamConsoleEntry({
+        type: "assistant_snapshot",
+        assistantText: "Working...",
+      })
+    ).toBeUndefined();
   });
 });
 

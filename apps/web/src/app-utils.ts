@@ -1,5 +1,6 @@
 import {
   type ChatSession,
+  type ChatStreamEvent,
   type ChatTurn,
   getPresetById,
   type PartialChatRuntimeConfig,
@@ -15,6 +16,14 @@ export interface CommandSearchableItem {
   label: string;
   description: string;
   keywords: string[];
+}
+
+export interface StreamConsoleEntry {
+  id: string;
+  detail?: string;
+  summary: string;
+  timestamp: string;
+  tone: "info" | "success" | "error";
 }
 
 export type ThemeMode = "light" | "dark";
@@ -141,6 +150,56 @@ export function getNextFocusableIndex(
   }
 
   return undefined;
+}
+
+export function buildStreamConsoleEntry(
+  event: ChatStreamEvent,
+  timestamp = new Date().toISOString()
+): StreamConsoleEntry | undefined {
+  switch (event.type) {
+    case "thread":
+      return {
+        id: `${timestamp}-thread`,
+        summary: "Request queued",
+        detail: event.thread.title,
+        timestamp,
+        tone: "info",
+      };
+    case "assistant_snapshot":
+      return undefined;
+    case "skill_call":
+      return {
+        id: `${timestamp}-skill-call-${event.skillName}`,
+        summary: `Tool call · ${event.skillName}`,
+        detail: event.skillInput,
+        timestamp,
+        tone: "info",
+      };
+    case "skill_result":
+      return {
+        id: `${timestamp}-skill-result-${event.skillName}`,
+        summary: `Tool result · ${event.skillName} (exit ${event.exitCode})`,
+        detail: event.skillOutput,
+        timestamp,
+        tone: event.exitCode === 0 ? "success" : "error",
+      };
+    case "complete":
+      return {
+        id: `${timestamp}-complete`,
+        summary: "Response saved",
+        detail: event.response.assistantTurn.bodyMarkdown,
+        timestamp,
+        tone: "success",
+      };
+    case "error":
+      return {
+        id: `${timestamp}-error`,
+        summary: "Stream error",
+        detail: event.error,
+        timestamp,
+        tone: "error",
+      };
+  }
 }
 
 export function isEditableElement(target: EventTarget | null): boolean {

@@ -3,7 +3,6 @@ import {
   type ChatSessionSummary,
   type ChatTurn,
   GEMMA_BALANCED_PRESET_ID,
-  GEMMA_FAST_PRESET_ID,
   GEMMA_PRESETS,
   getPresetById,
   type PartialChatRuntimeConfig,
@@ -21,6 +20,7 @@ import remarkGfm from "remark-gfm";
 import {
   applyPresetRuntimeConfig,
   buildMessages,
+  buildStreamConsoleEntry,
   filterCommandItems,
   formatTime,
   getNextFocusableIndex,
@@ -49,7 +49,6 @@ interface StreamingState {
   sending: boolean;
   assistantText?: string;
   thinkingText?: string;
-  skillActivity?: string;
   error?: string;
 }
 
@@ -61,6 +60,14 @@ interface CommandItem {
   keywords: string[];
   shortcut?: string;
   run: () => void;
+}
+
+interface StreamConsoleEntryViewModel {
+  id: string;
+  detail?: string;
+  summary: string;
+  timestamp: string;
+  tone: "info" | "success" | "error";
 }
 
 type MobileSection = "agents" | "history" | "chat" | "details";
@@ -100,6 +107,9 @@ export default function App() {
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
+  const [streamConsoleEntries, setStreamConsoleEntries] = useState<
+    StreamConsoleEntryViewModel[]
+  >([]);
   const [liveThread, setLiveThread] = useState<ChatSession | undefined>();
   const [historyError, setHistoryError] = useState<string>();
   const [pendingSessionAction, setPendingSessionAction] = useState<{
@@ -246,8 +256,9 @@ export default function App() {
   const draftKey = buildDraftKey(selectedAgentId, activeSessionId);
   const draft = drafts[draftKey] ?? "";
   const activePreset = getPresetById(runtimeConfig.presetId);
-  const modeValue =
-    runtimeConfig.presetId === GEMMA_FAST_PRESET_ID ? "fast" : "think";
+  const thinkingEnabled =
+    runtimeConfig.lmStudioEnableThinking ?? activePreset.lmStudioEnableThinking;
+  const modeValue = thinkingEnabled ? "think" : "fast";
   const messages = buildMessages(thread, streaming);
   const status = streaming.sending
     ? "Generating"
@@ -337,10 +348,18 @@ export default function App() {
       },
       {
         id: "toggle-model-details",
-        label: modelDetailsOpen ? "Hide model details" : "Show model details",
-        description: "Toggle the advanced preset and model stats panel.",
+        label: modelDetailsOpen ? "Hide agent details" : "Show agent details",
+        description:
+          "Toggle the full agent detail rail, including console logs.",
         group: "Actions",
-        keywords: ["model", "details", "preset", "settings"],
+        keywords: [
+          "agent",
+          "details",
+          "model",
+          "status",
+          "console",
+          "settings",
+        ],
         run: () => handleModelDetailsToggle(!modelDetailsOpen),
       },
       {
@@ -456,6 +475,15 @@ export default function App() {
       focusSection("details");
       requestAnimationFrame(() => presetSelectRef.current?.focus());
     }
+  }
+
+  function appendConsoleEntry(
+    entry: StreamConsoleEntryViewModel | undefined
+  ): void {
+    if (!entry) {
+      return;
+    }
+    setStreamConsoleEntries((current) => [...current, entry]);
   }
 
   function handleCommandSelection(command: CommandItem) {
@@ -600,6 +628,7 @@ export default function App() {
     }
     const controller = new AbortController();
     abortRef.current = controller;
+    setStreamConsoleEntries([]);
     setStreaming({
       sending: true,
     });
@@ -612,13 +641,14 @@ export default function App() {
         selectedAgentId,
         {
           sessionId: activeSessionId,
-          title: thread?.title,
+          title: thread?.title ?? prompt,
           prompt,
           config: runtimeConfig,
         },
         {
           signal: controller.signal,
           onEvent: (event) => {
+            appendConsoleEntry(buildStreamConsoleEntry(event));
             switch (event.type) {
               case "thread":
                 setLiveThread(event.thread);
@@ -631,7 +661,6 @@ export default function App() {
                   ...state,
                   assistantText: event.assistantText,
                   thinkingText: event.thinkingText,
-                  skillActivity: undefined,
                 }));
                 break;
               case "skill_call":
@@ -639,7 +668,6 @@ export default function App() {
                   ...state,
                   assistantText: undefined,
                   thinkingText: undefined,
-                  skillActivity: `Running skill: ${event.skillName}…`,
                 }));
                 break;
               case "skill_result":
@@ -647,7 +675,6 @@ export default function App() {
                   ...state,
                   assistantText: undefined,
                   thinkingText: undefined,
-                  skillActivity: `Skill ${event.skillName} completed (exit ${event.exitCode})`,
                 }));
                 break;
               case "complete":
@@ -682,6 +709,12 @@ export default function App() {
         }
       );
     } catch (error) {
+      appendConsoleEntry(
+        buildStreamConsoleEntry({
+          type: "error",
+          error: error instanceof Error ? error.message : "Unknown error.",
+        })
+      );
       setStreaming({
         sending: false,
         error: error instanceof Error ? error.message : "Unknown error.",
@@ -695,6 +728,12 @@ export default function App() {
   function handleStop() {
     abortRef.current?.abort();
     abortRef.current = null;
+    appendConsoleEntry({
+      id: `${new Date().toISOString()}-stopped`,
+      summary: "Generation stopped",
+      timestamp: new Date().toISOString(),
+      tone: "error",
+    });
     setStreaming({
       sending: false,
       error: "Generation stopped.",
@@ -707,17 +746,17 @@ export default function App() {
     }
     setSelectedSessionId(selectedAgentId, null);
     setLiveThread(undefined);
+    setStreamConsoleEntries([]);
     setStreaming({ sending: false });
     setMobileSection("chat");
   }
 
   function handleModeChange(nextMode: "fast" | "think") {
-    setRuntimeConfig((current) =>
-      applyPresetRuntimeConfig(
-        current,
-        nextMode === "fast" ? GEMMA_FAST_PRESET_ID : GEMMA_BALANCED_PRESET_ID
-      )
-    );
+    setRuntimeConfig((current) => ({
+      ...current,
+      presetId: current.presetId ?? GEMMA_BALANCED_PRESET_ID,
+      lmStudioEnableThinking: nextMode === "think",
+    }));
   }
 
   async function handleSessionAction(
@@ -800,7 +839,7 @@ export default function App() {
           <span className="command-trigger-copy">
             <span className="command-trigger-title">Command palette</span>
             <span className="command-trigger-subtitle">
-              Jump between panels, switch views, and toggle model details.
+              Jump between panels, switch views, and toggle agent details.
             </span>
           </span>
           <kbd>Ctrl/Cmd+K</kbd>
@@ -1068,11 +1107,9 @@ export default function App() {
             <p className="support-text">
               {threadDeleted
                 ? "Read-only · moved to Trash"
-                : streaming.skillActivity
-                  ? streaming.skillActivity
-                  : streaming.sending
-                    ? "Streaming live"
-                    : "Streaming ready"}{" "}
+                : streaming.sending
+                  ? "Streaming live"
+                  : "Streaming ready"}{" "}
               · {modelTone}
             </p>
             <div className="chat-overview">
@@ -1118,13 +1155,13 @@ export default function App() {
                 </button>
               </fieldset>
               <button
-                aria-controls="model-details-panel"
+                aria-controls="agent-details-content"
                 aria-expanded={modelDetailsOpen}
                 className="ghost-button"
                 onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
                 type="button"
               >
-                {modelDetailsOpen ? "Hide details" : "Model details"}
+                {modelDetailsOpen ? "Hide details" : "Show details"}
               </button>
             </div>
           </div>
@@ -1230,146 +1267,183 @@ export default function App() {
             <h2>{agentDetailQuery.data?.title ?? "No agent selected"}</h2>
           </div>
           <button
-            aria-controls="model-details-panel"
+            aria-controls="agent-details-content"
             aria-expanded={modelDetailsOpen}
             className="ghost-button"
             onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
             ref={modelDetailsToggleRef}
             type="button"
           >
-            {modelDetailsOpen ? "Hide model details" : "Show model details"}
+            {modelDetailsOpen ? "Hide details" : "Show details"}
           </button>
         </div>
-        <section className="detail-section">
-          <h3>Agent</h3>
-          <p>
-            {agentDetailQuery.data?.description ??
-              "Select an agent to inspect its prompt bundle."}
-          </p>
-          <div className="chip-row">
-            {(agentDetailQuery.data?.skillNames ?? []).map((skillName) => (
-              <span className="chip" key={skillName}>
-                {skillName}
-              </span>
-            ))}
-          </div>
-        </section>
-        <section className="detail-section">
-          <h3>Model</h3>
-          <p>
-            {selectedModel?.displayName ??
-              runtimeConfig.model ??
-              "Choose a model for this chat."}
-          </p>
-          <div className="chip-row">
-            <span className="chip">{activePreset.title}</span>
-            {selectedModel ? (
-              <span className="chip">{selectedModel.provider}</span>
-            ) : null}
-            <span className="chip">{modelTone}</span>
-          </div>
-          {!modelDetailsOpen ? (
-            <p className="support-text detail-hint">
-              Model details stay hidden by default so the workspace keeps its
-              focus on the conversation.
-            </p>
-          ) : null}
-        </section>
         {modelDetailsOpen ? (
-          <section className="detail-section" id="model-details-panel">
-            <h3>Model details</h3>
-            <div className="detail-controls">
-              <label className="control-stack">
-                <span className="control-label">Model</span>
-                <select
-                  aria-label="Chat model"
-                  className="select"
-                  onChange={(event) =>
-                    setRuntimeConfig((current) => ({
-                      ...current,
-                      model: event.target.value,
-                    }))
-                  }
-                  value={runtimeConfig.model ?? ""}
+          <div className="detail-panel-content" id="agent-details-content">
+            <section className="detail-section">
+              <h3>Agent</h3>
+              <p>
+                {agentDetailQuery.data?.description ??
+                  "Select an agent to inspect its prompt bundle."}
+              </p>
+              <div className="chip-row">
+                {(agentDetailQuery.data?.skillNames ?? []).map((skillName) => (
+                  <span className="chip" key={skillName}>
+                    {skillName}
+                  </span>
+                ))}
+              </div>
+            </section>
+            <section className="detail-section">
+              <h3>Agent console</h3>
+              <p>Live request and tool-call events for the latest run.</p>
+              {streamConsoleEntries.length > 0 ? (
+                <div
+                  aria-label="Agent console"
+                  aria-live="polite"
+                  className="console-log"
+                  role="log"
                 >
-                  {(modelsQuery.data ?? []).map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.displayName}
-                    </option>
+                  {streamConsoleEntries.map((entry) => (
+                    <article
+                      className={`console-entry tone-${entry.tone}`}
+                      key={entry.id}
+                    >
+                      <div className="console-entry-header">
+                        <strong>{entry.summary}</strong>
+                        <span>{formatTime(entry.timestamp)}</span>
+                      </div>
+                      {entry.detail ? (
+                        <details className="console-entry-payload">
+                          <summary>Payload</summary>
+                          <pre>{entry.detail}</pre>
+                        </details>
+                      ) : null}
+                    </article>
                   ))}
-                </select>
-              </label>
-              <label className="control-stack">
-                <span className="control-label">Preset</span>
-                <select
-                  aria-label="Gemma preset"
-                  className="select"
-                  onChange={(event) =>
-                    setRuntimeConfig((current) =>
-                      applyPresetRuntimeConfig(current, event.target.value)
-                    )
-                  }
-                  ref={presetSelectRef}
-                  value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
-                >
-                  {GEMMA_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <p>{activePreset.description}</p>
-            <dl className="stats-grid">
-              <div>
-                <dt>Provider</dt>
-                <dd>{selectedModel?.provider ?? "—"}</dd>
+                </div>
+              ) : (
+                <p className="support-text detail-hint">
+                  Send a message to populate the console with request and
+                  tool-call logs.
+                </p>
+              )}
+            </section>
+            <section className="detail-section">
+              <h3>Model</h3>
+              <p>
+                {selectedModel?.displayName ??
+                  runtimeConfig.model ??
+                  "Choose a model for this chat."}
+              </p>
+              <div className="chip-row">
+                <span className="chip">{activePreset.title}</span>
+                {selectedModel ? (
+                  <span className="chip">{selectedModel.provider}</span>
+                ) : null}
+                <span className="chip">{modelTone}</span>
               </div>
-              <div>
-                <dt>Thinking</dt>
-                <dd>{activePreset.lmStudioEnableThinking ? "On" : "Off"}</dd>
+            </section>
+            <section className="detail-section" id="model-details-panel">
+              <h3>Model details</h3>
+              <div className="detail-controls">
+                <label className="control-stack">
+                  <span className="control-label">Model</span>
+                  <select
+                    aria-label="Chat model"
+                    className="select"
+                    onChange={(event) =>
+                      setRuntimeConfig((current) => ({
+                        ...current,
+                        model: event.target.value,
+                      }))
+                    }
+                    value={runtimeConfig.model ?? ""}
+                  >
+                    {(modelsQuery.data ?? []).map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="control-stack">
+                  <span className="control-label">Preset</span>
+                  <select
+                    aria-label="Gemma preset"
+                    className="select"
+                    onChange={(event) =>
+                      setRuntimeConfig((current) =>
+                        applyPresetRuntimeConfig(current, event.target.value)
+                      )
+                    }
+                    ref={presetSelectRef}
+                    value={runtimeConfig.presetId ?? GEMMA_BALANCED_PRESET_ID}
+                  >
+                    {GEMMA_PRESETS.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
-              <div>
-                <dt>Max tokens</dt>
-                <dd>
-                  {runtimeConfig.maxCompletionTokens ??
-                    activePreset.maxCompletionTokens}
-                </dd>
-              </div>
-              <div>
-                <dt>Temperature</dt>
-                <dd>{runtimeConfig.temperature ?? activePreset.temperature}</dd>
-              </div>
-              <div>
-                <dt>Top P</dt>
-                <dd>{runtimeConfig.topP ?? activePreset.topP}</dd>
-              </div>
-            </dl>
-          </section>
+              <p>{activePreset.description}</p>
+              <p className="support-text">
+                The Fast/Think toggle changes reasoning mode only and keeps the
+                current preset budget.
+              </p>
+              <dl className="stats-grid">
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{selectedModel?.provider ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>Thinking</dt>
+                  <dd>{thinkingEnabled ? "On" : "Off"}</dd>
+                </div>
+                <div>
+                  <dt>Max tokens</dt>
+                  <dd>
+                    {runtimeConfig.maxCompletionTokens ??
+                      activePreset.maxCompletionTokens}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Temperature</dt>
+                  <dd>
+                    {runtimeConfig.temperature ?? activePreset.temperature}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Top P</dt>
+                  <dd>{runtimeConfig.topP ?? activePreset.topP}</dd>
+                </div>
+              </dl>
+            </section>
+            <section className="detail-section">
+              <h3>Local status</h3>
+              <p>{healthQuery.data?.message ?? "Checking LM Studio..."}</p>
+              <dl className="stats-grid">
+                <div>
+                  <dt>Store root</dt>
+                  <dd>{healthQuery.data?.workspace.storeRoot ?? "—"}</dd>
+                </div>
+                <div>
+                  <dt>Agents</dt>
+                  <dd>{healthQuery.data?.workspace.agentCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Models</dt>
+                  <dd>{healthQuery.data?.modelCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Default</dt>
+                  <dd>{healthQuery.data?.defaultModel ?? "—"}</dd>
+                </div>
+              </dl>
+            </section>
+          </div>
         ) : null}
-        <section className="detail-section">
-          <h3>Local status</h3>
-          <p>{healthQuery.data?.message ?? "Checking LM Studio..."}</p>
-          <dl className="stats-grid">
-            <div>
-              <dt>Store root</dt>
-              <dd>{healthQuery.data?.workspace.storeRoot ?? "—"}</dd>
-            </div>
-            <div>
-              <dt>Agents</dt>
-              <dd>{healthQuery.data?.workspace.agentCount ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Models</dt>
-              <dd>{healthQuery.data?.modelCount ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Default</dt>
-              <dd>{healthQuery.data?.defaultModel ?? "—"}</dd>
-            </div>
-          </dl>
-        </section>
       </aside>
       {isCommandPaletteOpen ? (
         <div className="command-palette-overlay">
