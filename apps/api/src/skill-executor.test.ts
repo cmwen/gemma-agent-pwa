@@ -69,6 +69,25 @@ And also:
     ]);
   });
 
+  it("extracts legacy tool calls when the model splits call and skill name across lines", () => {
+    const text = `<|tool_call>call
+search-store{query: "TODO"}<tool_call|>`;
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      { skillName: "search-store", input: '{"query":"TODO"}' },
+    ]);
+  });
+
+  it("extracts legacy tool calls when the model inserts whitespace after call colon", () => {
+    const text = `<|tool_call>call: search-store{query: "TODO"}<tool_call|>`;
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      { skillName: "search-store", input: '{"query":"TODO"}' },
+    ]);
+  });
+
   it("returns empty array when no skill calls present", () => {
     const text = "Just a normal response with no tool calls.";
     expect(parseSkillCalls(text)).toEqual([]);
@@ -128,6 +147,17 @@ After`;
     const text = `Before
 
 <|tool_call>call:load-context{}<tool_call|>
+
+After`;
+
+    expect(stripSkillCalls(text)).toBe("Before\n\n\n\nAfter");
+  });
+
+  it("strips split legacy agent-skills tool calls", () => {
+    const text = `Before
+
+<|tool_call>call
+search-store{query: "TODO"}<tool_call|>
 
 After`;
 

@@ -34,6 +34,23 @@ describe("network helpers", () => {
     ]);
   });
 
+  it("normalizes allowed host URLs and adds their parent domain", () => {
+    vi.spyOn(os, "hostname").mockReturnValue("minipc");
+    __testing.setTailscaleStatusForTests(undefined);
+
+    expect(
+      getDetectedAllowedHosts(["https://minipc-wsl.tail2e322f.ts.net:55008/"])
+    ).toEqual([
+      "localhost",
+      "127.0.0.1",
+      "minipc-wsl",
+      "minipc.local",
+      "minipc",
+      "minipc-wsl.tail2e322f.ts.net",
+      ".tail2e322f.ts.net",
+    ]);
+  });
+
   it("adds the Tailscale DNS name and IP to detected web origins", () => {
     vi.spyOn(os, "hostname").mockReturnValue("minipc");
     __testing.setTailscaleStatusForTests({

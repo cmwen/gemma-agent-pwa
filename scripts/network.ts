@@ -34,12 +34,14 @@ export function getDetectedAllowedHosts(
 ): string[] {
   const tailscale = getTailscaleStatus();
   const magicDnsSuffix = normalizeHostname(tailscale?.MagicDNSSuffix);
+  const detectedDnsName = normalizeAllowedHost(tailscale?.Self?.DNSName);
 
   return dedupeStrings([
     ...getDetectedLocalHostnames(),
-    normalizeHostname(tailscale?.Self?.DNSName),
+    detectedDnsName,
+    getParentDomainAllowlistEntry(detectedDnsName),
     magicDnsSuffix ? `.${magicDnsSuffix}` : undefined,
-    ...additionalHosts,
+    ...expandAllowedHosts(additionalHosts),
   ]);
 }
 
@@ -59,6 +61,9 @@ export function getDetectedWebOrigins(
 
 export const __testing = {
   dedupeStrings,
+  expandAllowedHosts,
+  getParentDomainAllowlistEntry,
+  normalizeAllowedHost,
   normalizeHostname,
   resetTailscaleStatusCache,
   setTailscaleStatusForTests,
@@ -102,6 +107,65 @@ function setTailscaleStatusForTests(status: TailscaleStatus | undefined): void {
 function normalizeHostname(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/\.$/, "").toLowerCase();
   return normalized ? normalized : undefined;
+}
+
+function normalizeAllowedHost(value: string | undefined): string | undefined {
+  const normalized = normalizeHostname(value);
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (normalized.startsWith(".")) {
+    return normalized;
+  }
+
+  const ip = normalized.replace(/^\[(.*)\]$/, "$1");
+  if (isIP(ip)) {
+    return ip;
+  }
+
+  const parsedUrl = parseHostLikeUrl(normalized);
+  return normalizeHostname(parsedUrl?.hostname ?? normalized);
+}
+
+function expandAllowedHosts(values: string[]): string[] {
+  return values.flatMap((value) => {
+    const host = normalizeAllowedHost(value);
+    if (!host) {
+      return [];
+    }
+
+    return [host, getParentDomainAllowlistEntry(host)].filter(
+      (entry): entry is string => Boolean(entry)
+    );
+  });
+}
+
+function getParentDomainAllowlistEntry(
+  host: string | undefined
+): string | undefined {
+  if (!host || host.startsWith(".")) {
+    return undefined;
+  }
+
+  const labels = host.split(".");
+  if (labels.length < 3 || isIP(host)) {
+    return undefined;
+  }
+
+  return `.${labels.slice(1).join(".")}`;
+}
+
+function parseHostLikeUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {}
+
+  try {
+    return new URL(`http://${value}`);
+  } catch {
+    return undefined;
+  }
 }
 
 function dedupeStrings(values: Array<string | undefined>): string[] {

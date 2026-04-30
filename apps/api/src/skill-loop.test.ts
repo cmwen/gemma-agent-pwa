@@ -405,6 +405,85 @@ describe("runChatLoop", () => {
       ])
     );
   });
+
+  it("executes legacy split tool calls emitted by Gemma-style outputs", async () => {
+    const streamChat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistantText:
+          '<|tool_call>call\nsearch-store{query: "TODO"}<tool_call|>',
+        llmStats: {
+          recordedAt: "2026-04-27T00:00:00.000Z",
+          model: "google/gemma-4-e4b",
+          requestCount: 1,
+          inputTokens: 10,
+          outputTokens: 4,
+          durationMs: 100,
+        },
+      })
+      .mockResolvedValueOnce({
+        assistantText: "Here are the TODO notes.",
+        llmStats: {
+          recordedAt: "2026-04-27T00:00:00.000Z",
+          model: "google/gemma-4-e4b",
+          requestCount: 1,
+          inputTokens: 12,
+          outputTokens: 5,
+          durationMs: 110,
+        },
+      });
+    const executeSkill = vi.fn().mockResolvedValue({
+      skillName: "search-store",
+      output: "TODO 1\nTODO 2",
+      exitCode: 0,
+    });
+
+    const result = await runChatLoop({
+      agentId: "logseq",
+      agentPrompt: "Be helpful.",
+      config: {
+        provider: "lmstudio",
+        model: "google/gemma-4-e4b",
+        presetId: "gemma4-balanced",
+        lmStudioEnableThinking: true,
+        maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
+        temperature: 0.2,
+        topP: 0.95,
+        disabledSkills: [],
+      },
+      conversationTurns: [
+        {
+          messageId: "turn-1",
+          sender: "user",
+          createdAt: "2026-04-27T00:00:00.000Z",
+          bodyMarkdown: "search my logseq for TODOs",
+          relativePath: "in-flight",
+        },
+      ],
+      enabledSkills: [
+        {
+          name: "search-store",
+          description: "Searches the store.",
+          scope: "agent-local",
+          path: "/fake/SKILL.md",
+          sourceRoot: "/fake",
+          hasScript: true,
+          scriptPath: "/fake/run.py",
+          content: "Use this skill for searching.",
+        },
+      ],
+      sessionId: "session-789",
+      streamChat,
+      executeSkill,
+    });
+
+    expect(result.assistantText).toBe("Here are the TODO notes.");
+    expect(executeSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "search-store" }),
+      '{"query":"TODO"}'
+    );
+  });
 });
 
 describe("system prompt with executable skills", () => {

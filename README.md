@@ -93,7 +93,8 @@ If you run the apps separately, the defaults are still `http://localhost:55006`
 for the web app and `http://localhost:8787` for the API. The Vite dev server
 also allows the local hostname plus detected Tailscale MagicDNS hosts (for
 example `http://minipc-wsl.tail2e322f.ts.net:55008/`) by default; add more
-hosts with `GEMMA_AGENT_PWA_ALLOWED_HOSTS=host1,host2`.
+hosts with `GEMMA_AGENT_PWA_ALLOWED_HOSTS=host1,host2`, or paste a full URL and
+the dev server will whitelist both that hostname and its parent domain.
 
 ## GitHub Pages
 

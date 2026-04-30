@@ -13,7 +13,7 @@ const MAX_SKILL_GUIDANCE_CHARS = 900;
 const XML_SKILL_CALL_PATTERN =
   /<skill_call\s+name="([^"]+)">([\s\S]*?)<\/skill_call>/g;
 const LEGACY_TOOL_CALL_PATTERN =
-  /<\|tool_call>\s*call:([A-Za-z0-9_.-]+)([\s\S]*?)(?:<\|tool_call\|>|<tool_call\|>|<\/tool_call>)/g;
+  /<\|tool_call>\s*call(?:\s*:\s*|\s+)([A-Za-z0-9_.-]+)([\s\S]*?)(?:<\|tool_call\|>|<tool_call\|>|<\/tool_call>)/g;
 const LEGACY_QUOTE_TOKEN = '<|"|>';
 const SKILL_INPUT_JSON_ENV_KEY = "SKILL_INPUT_JSON";
 

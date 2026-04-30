@@ -794,6 +794,10 @@ export default function App() {
     buttons[nextIndex]?.focus();
   }
 
+  function isAbortError(error: unknown): boolean {
+    return error instanceof DOMException && error.name === "AbortError";
+  }
+
   useEffect(() => {
     function handleGlobalKeydown(event: globalThis.KeyboardEvent) {
       if (
@@ -948,6 +952,9 @@ export default function App() {
         }
       );
     } catch (error) {
+      if (isAbortError(error)) {
+        return;
+      }
       appendConsoleEntry(
         buildStreamConsoleEntry({
           type: "error",
@@ -983,6 +990,8 @@ export default function App() {
     if (!selectedAgentId) {
       return;
     }
+    abortRef.current?.abort();
+    abortRef.current = null;
     setSelectedSessionId(selectedAgentId, null);
     setLiveThread(undefined);
     setStreamConsoleEntries([]);
@@ -1022,6 +1031,10 @@ export default function App() {
         setSelectedSessionId(selectedAgentId, session.sessionId);
         setHistoryView("active");
       } else {
+        if (activeSessionId === session.sessionId) {
+          abortRef.current?.abort();
+          abortRef.current = null;
+        }
         await deleteSessionRequest(
           selectedAgentId,
           session.sessionId,

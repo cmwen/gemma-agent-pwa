@@ -35,6 +35,10 @@ import {
   logChatDebugMessage,
 } from "./chat-debug.js";
 import { runChatLoop } from "./chat-loop.js";
+import {
+  isSessionPersistenceCancelledError,
+  resolveWritableSession,
+} from "./chat-session.js";
 import { getLmStudioModelCatalog, listLmStudioModels } from "./lmstudio.js";
 
 const workspace = await resolveWorkspace();
@@ -160,18 +164,19 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         () => undefined
       )
     : undefined;
+  const writableThread = resolveWritableSession(existingThread);
   const availableModels = await listLmStudioModels();
   const defaultModel = chooseDefaultModel(availableModels)?.id ?? DEFAULT_MODEL;
   const mergedConfig = mergeRuntimeConfig(
     { model: defaultModel },
     agent.runtimeConfig,
-    existingThread?.runtimeConfig,
+    writableThread?.runtimeConfig,
     request.config
   );
   const prompt = request.prompt.trim();
   const title =
     request.title?.trim() ||
-    existingThread?.title ||
+    writableThread?.title ||
     prompt.slice(0, 72) ||
     "New Gemma chat";
   const userThread = await saveChatTurn(workspace, {
@@ -179,7 +184,7 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     sender: "user",
     bodyMarkdown: prompt,
     title,
-    sessionId: existingThread?.sessionId ?? request.sessionId,
+    sessionId: writableThread?.sessionId,
     runtimeConfig: mergedConfig,
   });
   const enabledSkills = await loadAgentSkills(
@@ -243,44 +248,63 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         emitEvent: queueEvent,
       });
 
-      const completedThread = await saveChatTurn(workspace, {
-        agentId,
-        sender: "assistant",
-        bodyMarkdown: loopResult.assistantText,
-        thinkingMarkdown: loopResult.thinkingText,
-        title: userThread.title,
-        sessionId: userThread.sessionId,
-        runtimeConfig: mergedConfig,
-        summary: summarizeThread(loopResult.assistantText),
-      });
-      const llmStatsWithRate = {
-        ...loopResult.llmStats,
-        ...(loopResult.llmStats.outputTokens > 0 &&
-        loopResult.llmStats.durationMs > 0
-          ? {
-              tokensPerSecond: Number(
-                (
-                  (loopResult.llmStats.outputTokens /
-                    loopResult.llmStats.durationMs) *
-                  1000
-                ).toFixed(2)
-              ),
-            }
-          : {}),
-      };
-      await recordSessionLlmUsage(
-        workspace,
-        agentId,
-        completedThread.sessionId,
-        llmStatsWithRate
-      );
-      const threadWithUsage = await getSession(
-        workspace,
-        agentId,
-        completedThread.sessionId
-      );
-      const assistantTurn = threadWithUsage.turns.at(-1);
-      if (!assistantTurn) {
+      let threadWithUsage: Awaited<ReturnType<typeof getSession>> | undefined;
+      let assistantTurn:
+        | Awaited<ReturnType<typeof getSession>>["turns"][number]
+        | undefined;
+      try {
+        const completedThread = await saveChatTurn(workspace, {
+          agentId,
+          sender: "assistant",
+          bodyMarkdown: loopResult.assistantText,
+          thinkingMarkdown: loopResult.thinkingText,
+          title: userThread.title,
+          sessionId: userThread.sessionId,
+          runtimeConfig: mergedConfig,
+          summary: summarizeThread(loopResult.assistantText),
+        });
+        const llmStatsWithRate = {
+          ...loopResult.llmStats,
+          ...(loopResult.llmStats.outputTokens > 0 &&
+          loopResult.llmStats.durationMs > 0
+            ? {
+                tokensPerSecond: Number(
+                  (
+                    (loopResult.llmStats.outputTokens /
+                      loopResult.llmStats.durationMs) *
+                    1000
+                  ).toFixed(2)
+                ),
+              }
+            : {}),
+        };
+        await recordSessionLlmUsage(
+          workspace,
+          agentId,
+          completedThread.sessionId,
+          llmStatsWithRate
+        );
+        threadWithUsage = await getSession(
+          workspace,
+          agentId,
+          completedThread.sessionId
+        );
+        assistantTurn = threadWithUsage.turns.at(-1);
+        if (!assistantTurn) {
+          throw new Error("Assistant turn was not persisted.");
+        }
+      } catch (error) {
+        if (isSessionPersistenceCancelledError(error)) {
+          await pendingWrite;
+          await queueEvent({
+            type: "error",
+            error: "Session was deleted before the response could be saved.",
+          });
+          return;
+        }
+        throw error;
+      }
+      if (!threadWithUsage || !assistantTurn) {
         throw new Error("Assistant turn was not persisted.");
       }
       await pendingWrite;
