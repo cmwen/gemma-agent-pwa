@@ -1,13 +1,14 @@
-import type {
-  AgentSummary,
-  ChatRequest,
-  ChatSession,
-  ChatSessionSummary,
-  ChatStreamEvent,
-  HealthStatus,
-  ModelDescriptor,
-  SessionDeleteMode,
-  SessionListState,
+import {
+  type AgentSummary,
+  type ChatRequest,
+  type ChatSession,
+  type ChatSessionSummary,
+  type ChatStreamEvent,
+  chatStreamEventSchema,
+  type HealthStatus,
+  type ModelDescriptor,
+  type SessionDeleteMode,
+  type SessionListState,
 } from "@gemma-agent-pwa/contracts";
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -85,7 +86,9 @@ export async function streamChat(
     signal: callbacks.signal,
   });
   if (!response.ok) {
-    throw new Error(`Chat request failed with status ${response.status}.`);
+    throw new Error(
+      await getResponseErrorMessage(response, "Chat request failed")
+    );
   }
   if (!response.body) {
     throw new Error("The chat stream did not return a readable body.");
@@ -93,24 +96,17 @@ export async function streamChat(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parser = createChatStreamEventParser();
 
   while (true) {
     const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    let newlineIndex = buffer.indexOf("\n");
-    while (newlineIndex >= 0) {
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      if (line) {
-        callbacks.onEvent(JSON.parse(line) as ChatStreamEvent);
-      }
-      newlineIndex = buffer.indexOf("\n");
+    const chunk = decoder.decode(value, { stream: !done });
+    for (const event of parser.pushChunk(chunk)) {
+      callbacks.onEvent(event);
     }
     if (done) {
-      const trailing = buffer.trim();
-      if (trailing) {
-        callbacks.onEvent(JSON.parse(trailing) as ChatStreamEvent);
+      for (const event of parser.flush()) {
+        callbacks.onEvent(event);
       }
       break;
     }
@@ -120,7 +116,7 @@ export async function streamChat(
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}.`);
+    throw new Error(await getResponseErrorMessage(response, "Request failed"));
   }
   return (await response.json()) as T;
 }
@@ -128,6 +124,139 @@ async function fetchJson<T>(url: string): Promise<T> {
 async function fetchOk(url: string, init?: RequestInit): Promise<void> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}.`);
+    throw new Error(await getResponseErrorMessage(response, "Request failed"));
   }
 }
+
+function createChatStreamEventParser(): {
+  flush: () => ChatStreamEvent[];
+  pushChunk: (chunk: string) => ChatStreamEvent[];
+} {
+  let buffer = "";
+
+  return {
+    pushChunk(chunk) {
+      buffer += chunk;
+      const result = consumeChatStreamBuffer(buffer);
+      buffer = result.remainingBuffer;
+      return result.events;
+    },
+    flush() {
+      const result = consumeChatStreamBuffer(buffer, { flush: true });
+      buffer = result.remainingBuffer;
+      return result.events;
+    },
+  };
+}
+
+function consumeChatStreamBuffer(
+  buffer: string,
+  options?: { flush?: boolean }
+): {
+  events: ChatStreamEvent[];
+  remainingBuffer: string;
+} {
+  const events: ChatStreamEvent[] = [];
+  let remainingBuffer = buffer;
+  let newlineIndex = remainingBuffer.indexOf("\n");
+
+  while (newlineIndex >= 0) {
+    const rawLine = remainingBuffer.slice(0, newlineIndex);
+    remainingBuffer = remainingBuffer.slice(newlineIndex + 1);
+    const event = parseChatStreamEventLine(rawLine);
+    if (event) {
+      events.push(event);
+    }
+    newlineIndex = remainingBuffer.indexOf("\n");
+  }
+
+  if (options?.flush) {
+    const event = parseChatStreamEventLine(remainingBuffer);
+    remainingBuffer = "";
+    if (event) {
+      events.push(event);
+    }
+  }
+
+  return { events, remainingBuffer };
+}
+
+function parseChatStreamEventLine(
+  rawLine: string
+): ChatStreamEvent | undefined {
+  const line = rawLine.trim();
+  if (!line) {
+    return undefined;
+  }
+
+  try {
+    return chatStreamEventSchema.parse(JSON.parse(line));
+  } catch (error) {
+    if (error instanceof SyntaxError || error instanceof Error) {
+      throw new Error(`Invalid chat stream event payload: ${line}`);
+    }
+    throw error;
+  }
+}
+
+async function getResponseErrorMessage(
+  response: Response,
+  fallbackMessage: string
+): Promise<string> {
+  const responseText = (await response.text()).trim();
+  if (!responseText) {
+    return `${fallbackMessage} with status ${response.status}.`;
+  }
+
+  if (isJsonResponse(response)) {
+    const payload = parseJsonRecord(responseText);
+    const message = payloadMessage(payload);
+    if (message) {
+      return message;
+    }
+  }
+
+  return responseText;
+}
+
+function isJsonResponse(response: Response): boolean {
+  return (
+    response.headers.get("content-type")?.toLowerCase().includes("json") ??
+    false
+  );
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function payloadMessage(
+  payload: Record<string, unknown> | undefined
+): string | undefined {
+  if (typeof payload?.error === "string") {
+    return payload.error;
+  }
+  if (typeof payload?.message === "string") {
+    return payload.message;
+  }
+  return undefined;
+}
+
+export const __testing = {
+  consumeChatStreamBuffer,
+  createChatStreamEventParser,
+  getResponseErrorMessage,
+  parseChatStreamEventLine,
+  parseJsonRecord,
+  payloadMessage,
+};

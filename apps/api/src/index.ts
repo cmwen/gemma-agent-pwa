@@ -26,7 +26,10 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamText } from "hono/streaming";
-import { getDetectedWebOrigins, splitCsv } from "../../../scripts/network.js";
+import {
+  getDetectedWebOriginsForPorts,
+  splitCsv,
+} from "../../../scripts/network.js";
 import { loadAgentSkills } from "./agent-skills.js";
 import {
   buildChatRequestDebugLog,
@@ -357,13 +360,9 @@ function summarizeThread(assistantText: string): string {
 function getAllowedCorsOrigins(): Set<string> {
   const configuredOrigins = splitCsv(process.env.GEMMA_AGENT_PWA_CORS_ORIGINS);
 
-  return new Set([
-    ...getDetectedWebOrigins(80),
-    ...getDetectedWebOrigins(4173),
-    ...getDetectedWebOrigins(5173),
-    ...getDetectedWebOrigins(55006),
-    ...configuredOrigins,
-  ]);
+  return new Set(
+    getDetectedWebOriginsForPorts([80, 4173, 5173, 55006], configuredOrigins)
+  );
 }
 
 function isAllowedCorsOrigin(origin: string): boolean {
@@ -371,9 +370,16 @@ function isAllowedCorsOrigin(origin: string): boolean {
     return true;
   }
 
+  return parseOrigin(origin)?.hostname.endsWith(".github.io") ?? false;
+}
+
+function parseOrigin(origin: string): URL | undefined {
   try {
-    return new URL(origin).hostname.endsWith(".github.io");
-  } catch {
-    return false;
+    return new URL(origin);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      return undefined;
+    }
+    throw error;
   }
 }

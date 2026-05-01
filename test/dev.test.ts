@@ -4,7 +4,6 @@ import {
   appendCsv,
   buildApiBaseUrl,
   buildApiProxyTarget,
-  buildWebOrigins,
   DEFAULT_DEV_API_BASE_URL,
   findAvailablePort,
   resolvePort,
@@ -41,15 +40,6 @@ describe("dev launcher helpers", () => {
 
   it("builds the local API proxy target from the selected API port", () => {
     expect(buildApiProxyTarget(8877)).toBe("http://127.0.0.1:8877");
-  });
-
-  it("builds the local web origins used for API CORS", () => {
-    expect(buildWebOrigins(55008)).toEqual([
-      "http://localhost:55008",
-      "http://127.0.0.1:55008",
-      "http://minipc-wsl:55008",
-      "http://minipc.local:55008",
-    ]);
   });
 
   it("appends CSV values without duplicating origins", () => {

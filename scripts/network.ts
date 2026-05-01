@@ -25,8 +25,14 @@ export function splitCsv(value = ""): string[] {
     .filter(Boolean);
 }
 
-export function buildHttpOrigins(port: number, hosts: string[]): string[] {
-  return dedupeStrings(hosts.map((host) => toOrigin(host, port)));
+export function buildHttpOrigins(
+  port: number,
+  hosts: Array<string | undefined>
+): string[] {
+  return dedupeStrings(
+    hosts.map((host) => (host ? toOrigin(host, port) : undefined)),
+    normalizeOrigin
+  );
 }
 
 export function getDetectedAllowedHosts(
@@ -59,12 +65,27 @@ export function getDetectedWebOrigins(
   ]);
 }
 
+export function getDetectedWebOriginsForPorts(
+  ports: number[],
+  additionalOrigins: string[] = []
+): string[] {
+  return dedupeStrings(
+    [
+      ...ports.flatMap((port) => getDetectedWebOrigins(port)),
+      ...additionalOrigins,
+    ],
+    normalizeOrigin
+  );
+}
+
 export const __testing = {
   dedupeStrings,
   expandAllowedHosts,
   getParentDomainAllowlistEntry,
   normalizeAllowedHost,
+  normalizeOrigin,
   normalizeHostname,
+  parseJsonObject,
   resetTailscaleStatusCache,
   setTailscaleStatusForTests,
   toOrigin,
@@ -79,21 +100,38 @@ function getTailscaleStatus(): TailscaleStatus | undefined {
     return cachedTailscaleStatus ?? undefined;
   }
 
+  let rawStatus: string;
   try {
-    const rawStatus = childProcess.execFileSync(
-      "tailscale",
-      ["status", "--json"],
-      {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }
-    );
-    cachedTailscaleStatus = JSON.parse(rawStatus) as TailscaleStatus;
-    return cachedTailscaleStatus;
-  } catch {
+    rawStatus = childProcess.execFileSync("tailscale", ["status", "--json"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (error) {
     cachedTailscaleStatus = null;
+    if (
+      error instanceof Error &&
+      (error as NodeJS.ErrnoException).code !== "ENOENT"
+    ) {
+      const message =
+        typeof (error as NodeJS.ErrnoException).code === "string"
+          ? `${error.message} [${(error as NodeJS.ErrnoException).code}]`
+          : error.message;
+      console.warn(`[network] Failed to read Tailscale status: ${message}`);
+    }
     return undefined;
   }
+
+  const parsedStatus = parseJsonObject(rawStatus);
+  if (!parsedStatus) {
+    cachedTailscaleStatus = null;
+    console.warn(
+      "[network] Ignoring malformed tailscale status --json output."
+    );
+    return undefined;
+  }
+
+  cachedTailscaleStatus = parsedStatus as TailscaleStatus;
+  return cachedTailscaleStatus;
 }
 
 function resetTailscaleStatusCache(): void {
@@ -128,6 +166,20 @@ function normalizeAllowedHost(value: string | undefined): string | undefined {
   return normalizeHostname(parsedUrl?.hostname ?? normalized);
 }
 
+function normalizeOrigin(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  const parsedUrl = parseHostLikeUrl(normalized);
+  if (parsedUrl) {
+    return parsedUrl.origin;
+  }
+
+  return normalized.replace(/\/+$/, "") || undefined;
+}
+
 function expandAllowedHosts(values: string[]): string[] {
   return values.flatMap((value) => {
     const host = normalizeAllowedHost(value);
@@ -159,19 +211,46 @@ function getParentDomainAllowlistEntry(
 function parseHostLikeUrl(value: string): URL | undefined {
   try {
     return new URL(value);
-  } catch {}
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error;
+    }
+  }
 
   try {
     return new URL(`http://${value}`);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof TypeError)) {
+      throw error;
+    }
     return undefined;
   }
 }
 
-function dedupeStrings(values: Array<string | undefined>): string[] {
+function parseJsonObject(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    return undefined;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function dedupeStrings(
+  values: Array<string | undefined>,
+  normalizeValue: (
+    value: string | undefined
+  ) => string | undefined = normalizeHostname
+): string[] {
   const deduped: string[] = [];
   for (const value of values) {
-    const normalizedValue = normalizeHostname(value);
+    const normalizedValue = normalizeValue(value);
     if (!normalizedValue || deduped.includes(normalizedValue)) {
       continue;
     }

@@ -1,11 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import net from "node:net";
 import { createInterface } from "node:readline";
-import {
-  buildHttpOrigins,
-  getDetectedWebOrigins,
-  splitCsv,
-} from "./network.js";
+import { getDetectedWebOrigins, splitCsv } from "./network.js";
 
 export const DEFAULT_API_PORT = 8787;
 export const DEFAULT_WEB_PORT = 55006;
@@ -93,15 +89,6 @@ export function buildApiBaseUrl(apiPort: number): string {
 
 export function buildApiProxyTarget(apiPort: number): string {
   return `http://127.0.0.1:${apiPort}`;
-}
-
-export function buildWebOrigins(webPort: number): string[] {
-  return buildHttpOrigins(webPort, [
-    "localhost",
-    "127.0.0.1",
-    "minipc-wsl",
-    "minipc.local",
-  ]);
 }
 
 export function appendCsv(

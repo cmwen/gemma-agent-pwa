@@ -72,6 +72,20 @@ pnpm build
 pnpm lint
 ```
 
+## Behavior contracts
+
+- Runtime config resolution flows from app defaults to agent defaults to session
+  state to the current request. Later sources win, and the selected preset fills
+  any unset thinking, token, context, temperature, and `topP` values.
+- Dev host allowlists and API CORS origins come from the same network helper
+  logic. The app auto-allows localhost, `127.0.0.1`, detected machine hostnames,
+  and detected Tailscale DNS/IP entries; add more hosts with
+  `GEMMA_AGENT_PWA_ALLOWED_HOSTS` and more origins with
+  `GEMMA_AGENT_PWA_CORS_ORIGINS`.
+- Chat streaming uses newline-delimited JSON events that match the shared
+  `ChatStreamEvent` contract, and the web client validates each parsed event
+  before applying it.
+
 ## Usability
 
 - The web UI now supports **light and dark themes** with a persistent theme toggle.

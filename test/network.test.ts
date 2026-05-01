@@ -4,6 +4,7 @@ import {
   __testing,
   getDetectedAllowedHosts,
   getDetectedWebOrigins,
+  getDetectedWebOriginsForPorts,
 } from "../scripts/network.js";
 
 afterEach(() => {
@@ -75,5 +76,27 @@ describe("network helpers", () => {
 
   it("omits the default HTTP port when building browser origins", () => {
     expect(getDetectedWebOrigins(80)).toContain("http://minipc.local");
+  });
+
+  it("deduplicates detected origins across multiple ports and configured values", () => {
+    vi.spyOn(os, "hostname").mockReturnValue("minipc");
+    __testing.setTailscaleStatusForTests(undefined);
+
+    expect(
+      getDetectedWebOriginsForPorts(
+        [55006, 55006],
+        ["http://localhost:55006", "http://minipc.local:55006/"]
+      )
+    ).toEqual([
+      "http://localhost:55006",
+      "http://127.0.0.1:55006",
+      "http://minipc-wsl:55006",
+      "http://minipc.local:55006",
+      "http://minipc:55006",
+    ]);
+  });
+
+  it("falls back cleanly when tailscale returns malformed JSON", () => {
+    expect(__testing.parseJsonObject("{oops")).toBeUndefined();
   });
 });

@@ -105,6 +105,12 @@ export function getPresetById(presetId?: string): RuntimePreset {
 export function mergeRuntimeConfig(
   ...configs: Array<Partial<ChatRuntimeConfig> | undefined>
 ): ChatRuntimeConfig {
+  return applyPresetRuntimeConfigDefaults(normalizeRuntimeConfig(configs));
+}
+
+export function normalizeRuntimeConfig(
+  configs: Array<Partial<ChatRuntimeConfig> | undefined>
+): ChatRuntimeConfig {
   const merged: Record<string, unknown> = {};
   for (const current of configs) {
     if (!current) {
@@ -112,21 +118,27 @@ export function mergeRuntimeConfig(
     }
     Object.assign(merged, current);
   }
-  const parsed = chatRuntimeConfigSchema.parse(merged);
-  const preset = getPresetById(parsed.presetId);
+
+  return chatRuntimeConfigSchema.parse(merged);
+}
+
+export function applyPresetRuntimeConfigDefaults(
+  config: ChatRuntimeConfig
+): ChatRuntimeConfig {
+  const preset = getPresetById(config.presetId);
 
   return chatRuntimeConfigSchema.parse({
     provider: DEFAULT_PROVIDER,
-    model: parsed.model,
-    presetId: parsed.presetId,
+    model: config.model,
+    presetId: config.presetId,
     lmStudioEnableThinking:
-      parsed.lmStudioEnableThinking ?? preset.lmStudioEnableThinking,
+      config.lmStudioEnableThinking ?? preset.lmStudioEnableThinking,
     maxCompletionTokens:
-      parsed.maxCompletionTokens ?? preset.maxCompletionTokens,
-    contextWindowSize: parsed.contextWindowSize ?? preset.contextWindowSize,
-    temperature: parsed.temperature ?? preset.temperature,
-    topP: parsed.topP ?? preset.topP,
-    disabledSkills: parsed.disabledSkills,
+      config.maxCompletionTokens ?? preset.maxCompletionTokens,
+    contextWindowSize: config.contextWindowSize ?? preset.contextWindowSize,
+    temperature: config.temperature ?? preset.temperature,
+    topP: config.topP ?? preset.topP,
+    disabledSkills: config.disabledSkills,
   });
 }
 
