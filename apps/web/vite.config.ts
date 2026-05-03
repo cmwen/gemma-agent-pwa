@@ -23,6 +23,13 @@ const allowedHosts = [
 
 export default defineConfig({
   base: basePath,
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: manualChunkName,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({
@@ -103,4 +110,43 @@ function parseAbsoluteUrl(value: string | undefined): URL | undefined {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function manualChunkName(id: string): string | undefined {
+  if (!id.includes("node_modules")) {
+    return undefined;
+  }
+
+  if (
+    id.includes("react-markdown") ||
+    id.includes("remark-gfm") ||
+    id.includes("/remark-") ||
+    id.includes("/rehype-") ||
+    id.includes("/unified/") ||
+    id.includes("/micromark") ||
+    id.includes("/mdast-util-") ||
+    id.includes("/hast-util-") ||
+    id.includes("/property-information/") ||
+    id.includes("/vfile")
+  ) {
+    return "markdown-vendor";
+  }
+
+  if (id.includes("/react-dom/") || id.includes("/react/")) {
+    return "react-vendor";
+  }
+
+  if (
+    id.includes("@tanstack/react-query") ||
+    id.includes("/zustand/") ||
+    id.includes("/dexie/")
+  ) {
+    return "state-vendor";
+  }
+
+  if (id.includes("/workbox-window/")) {
+    return "pwa-vendor";
+  }
+
+  return undefined;
 }

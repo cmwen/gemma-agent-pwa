@@ -17,6 +17,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -238,6 +239,7 @@ export default function App() {
   const notificationPermissionRef = useRef(notificationPermission);
   const runtimeConfigSourceKeyRef = useRef<string>("");
   const forceAutoScrollTimelineRef = useRef(true);
+  const timelineSyncKeyRef = useRef("");
   const timelineMetricsRef = useRef<
     | {
         clientHeight: number;
@@ -311,6 +313,11 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (selectedAgentId === undefined) {
+      setHistoryView("active");
+      setHistoryError(undefined);
+      return;
+    }
     setHistoryView("active");
     setHistoryError(undefined);
   }, [selectedAgentId]);
@@ -430,6 +437,7 @@ export default function App() {
     runtimeConfig.lmStudioEnableThinking ?? activePreset.lmStudioEnableThinking;
   const modeValue = thinkingEnabled ? "think" : "fast";
   const messages = buildMessages(thread, streaming);
+  const timelineSyncKey = `${messages.length}:${streaming.assistantText ?? ""}:${streaming.thinkingText ?? ""}:${streaming.sending ? "1" : "0"}`;
   const status = streaming.sending
     ? "Generating"
     : healthQuery.data?.lmStudioReachable
@@ -452,153 +460,195 @@ export default function App() {
     Boolean(runtimeConfig.model) &&
     !threadDeleted;
 
-  const commandItems = useMemo<CommandItem[]>(
-    () => [
-      {
-        id: "jump-chat",
-        label: "Go to chat",
-        description: "Focus the active conversation and composer.",
-        group: "Jump",
-        keywords: ["chat", "composer", "conversation"],
-        shortcut: "Alt+1",
-        run: () => focusSection("chat"),
-      },
-      {
-        id: "jump-agents",
-        label: "Go to agents",
-        description: "Browse the installed local agents.",
-        group: "Jump",
-        keywords: ["agents", "sidebar", "navigation"],
-        shortcut: "Alt+2",
-        run: () => focusSection("agents"),
-      },
-      {
-        id: "jump-history",
-        label: "Go to history",
-        description: "Review recent and deleted chats.",
-        group: "Jump",
-        keywords: ["history", "sessions", "trash"],
-        shortcut: "Alt+3",
-        run: () => focusSection("history"),
-      },
-      {
-        id: "jump-details",
-        label: "Go to details",
-        description: "Inspect agent status and runtime settings.",
-        group: "Jump",
-        keywords: ["details", "settings", "status"],
-        shortcut: "Alt+4",
-        run: () => focusSection("details"),
-      },
-      {
-        id: "new-chat",
-        label: "Start new chat",
-        description: "Clear the current thread for the selected agent.",
-        group: "Actions",
-        keywords: ["new", "chat", "thread"],
-        shortcut: "N",
-        run: () => handleNewChat(),
-      },
-      {
-        id: "open-schedules",
-        label: "Manage scheduled tasks",
-        description:
-          "Open the details rail and create or edit recurring hourly, daily, and weekly tasks.",
-        group: "Actions",
-        keywords: ["schedule", "scheduled", "tasks", "automation", "reminders"],
-        run: () => openScheduleEditor(),
-      },
-      {
-        id: "open-help",
-        label: "Show shortcuts and help",
-        description: "Open the keyboard shortcut list and quick usage tips.",
-        group: "Actions",
-        keywords: ["help", "shortcuts", "keyboard", "tips"],
-        shortcut: "?",
-        run: () => openHelpDialog(),
-      },
-      {
-        id: "toggle-history-view",
-        label:
-          historyView === "active"
-            ? "Show deleted history"
-            : "Show recent history",
-        description:
-          historyView === "active"
-            ? "Switch the history rail to Trash."
-            : "Switch the history rail back to recent chats.",
-        group: "Actions",
-        keywords: ["history", "trash", "recent", "deleted"],
-        run: () =>
-          setHistoryView((current) =>
-            current === "active" ? "deleted" : "active"
-          ),
-      },
-      {
-        id: "toggle-model-details",
-        label: modelDetailsOpen ? "Hide details panel" : "Show details panel",
-        description:
-          "Toggle the full details rail, including console logs and model settings.",
-        group: "Actions",
-        keywords: [
-          "agent",
-          "details",
-          "model",
-          "status",
-          "console",
-          "settings",
-        ],
-        run: () => handleModelDetailsToggle(!modelDetailsOpen),
-      },
-      {
-        id: "toggle-theme",
-        label:
-          themeMode === "dark"
-            ? "Switch to light theme"
-            : "Switch to dark theme",
-        description: "Flip the app theme and persist it locally.",
-        group: "Actions",
-        keywords: ["theme", "light", "dark", "appearance"],
-        run: () => handleThemeToggle(),
-      },
-      {
-        id: "toggle-notifications",
-        label: notificationsEnabled
-          ? "Disable reply notifications"
-          : "Enable reply notifications",
-        description:
-          notificationPermission === "granted"
-            ? "Toggle browser notifications for completed background replies."
-            : "Request browser permission for completed background reply notifications.",
-        group: "Actions",
-        keywords: ["notifications", "notify", "alerts", "background", "pwa"],
-        run: () => void handleNotificationsToggle(),
-      },
-    ],
-    [
-      historyView,
-      modelDetailsOpen,
-      notificationPermission,
-      notificationsEnabled,
-      themeMode,
-    ]
+  const focusSection = useCallback(
+    (section: MobileSection, options?: { focusTarget?: boolean }) => {
+      if (section === "details" && !modelDetailsOpen) {
+        setModelDetailsOpen(true);
+      }
+      setMobileSection(section);
+      if (options?.focusTarget === false) {
+        return;
+      }
+      requestAnimationFrame(() => {
+        switch (section) {
+          case "agents":
+            newChatButtonRef.current?.focus();
+            break;
+          case "history":
+            recentHistoryButtonRef.current?.focus();
+            break;
+          case "chat":
+            composerInputRef.current?.focus();
+            break;
+          case "details":
+            modelDetailsToggleRef.current?.focus();
+            break;
+        }
+      });
+    },
+    [modelDetailsOpen, setModelDetailsOpen]
   );
-  const visibleCommandItems = useMemo(() => {
-    return filterCommandItems(commandItems, commandQuery);
-  }, [commandItems, commandQuery]);
-  const groupedCommandItems = useMemo(
-    () =>
-      (["Jump", "Actions"] as const)
-        .map(
-          (group) =>
-            [
-              group,
-              visibleCommandItems.filter((command) => command.group === group),
-            ] as const
-        )
-        .filter(([, commands]) => commands.length > 0),
-    [visibleCommandItems]
+  const openCommandPalette = useCallback(() => {
+    lastFocusedElementRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setHelpOpen(false);
+    setCommandQuery("");
+    setCommandPaletteOpen(true);
+  }, []);
+  const closeCommandPalette = useCallback(
+    (options?: { restoreFocus?: boolean }) => {
+      setCommandPaletteOpen(false);
+      setCommandQuery("");
+      if (options?.restoreFocus === false) {
+        return;
+      }
+      requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
+    },
+    []
   );
+  const openHelpDialog = useCallback(() => {
+    lastFocusedElementRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setCommandPaletteOpen(false);
+    setHelpOpen(true);
+  }, []);
+  const closeHelpDialog = useCallback(
+    (options?: { restoreFocus?: boolean }) => {
+      setHelpOpen(false);
+      if (options?.restoreFocus === false) {
+        return;
+      }
+      requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
+    },
+    []
+  );
+  const commandItems: CommandItem[] = [
+    {
+      id: "jump-chat",
+      label: "Go to chat",
+      description: "Focus the active conversation and composer.",
+      group: "Jump",
+      keywords: ["chat", "composer", "conversation"],
+      shortcut: "Alt+1",
+      run: () => focusSection("chat"),
+    },
+    {
+      id: "jump-agents",
+      label: "Go to agents",
+      description: "Browse the installed local agents.",
+      group: "Jump",
+      keywords: ["agents", "sidebar", "navigation"],
+      shortcut: "Alt+2",
+      run: () => focusSection("agents"),
+    },
+    {
+      id: "jump-history",
+      label: "Go to history",
+      description: "Review recent and deleted chats.",
+      group: "Jump",
+      keywords: ["history", "sessions", "trash"],
+      shortcut: "Alt+3",
+      run: () => focusSection("history"),
+    },
+    {
+      id: "jump-details",
+      label: "Go to details",
+      description: "Inspect agent status and runtime settings.",
+      group: "Jump",
+      keywords: ["details", "settings", "status"],
+      shortcut: "Alt+4",
+      run: () => focusSection("details"),
+    },
+    {
+      id: "new-chat",
+      label: "Start new chat",
+      description: "Clear the current thread for the selected agent.",
+      group: "Actions",
+      keywords: ["new", "chat", "thread"],
+      shortcut: "N",
+      run: () => handleNewChat(),
+    },
+    {
+      id: "open-schedules",
+      label: "Manage scheduled tasks",
+      description:
+        "Open the details rail and create or edit recurring hourly, daily, and weekly tasks.",
+      group: "Actions",
+      keywords: ["schedule", "scheduled", "tasks", "automation", "reminders"],
+      run: () => openScheduleEditor(),
+    },
+    {
+      id: "open-help",
+      label: "Show shortcuts and help",
+      description: "Open the keyboard shortcut list and quick usage tips.",
+      group: "Actions",
+      keywords: ["help", "shortcuts", "keyboard", "tips"],
+      shortcut: "?",
+      run: () => openHelpDialog(),
+    },
+    {
+      id: "toggle-history-view",
+      label:
+        historyView === "active"
+          ? "Show deleted history"
+          : "Show recent history",
+      description:
+        historyView === "active"
+          ? "Switch the history rail to Trash."
+          : "Switch the history rail back to recent chats.",
+      group: "Actions",
+      keywords: ["history", "trash", "recent", "deleted"],
+      run: () =>
+        setHistoryView((current) =>
+          current === "active" ? "deleted" : "active"
+        ),
+    },
+    {
+      id: "toggle-model-details",
+      label: modelDetailsOpen ? "Hide details panel" : "Show details panel",
+      description:
+        "Toggle the full details rail, including console logs and model settings.",
+      group: "Actions",
+      keywords: ["agent", "details", "model", "status", "console", "settings"],
+      run: () => handleModelDetailsToggle(!modelDetailsOpen),
+    },
+    {
+      id: "toggle-theme",
+      label:
+        themeMode === "dark" ? "Switch to light theme" : "Switch to dark theme",
+      description: "Flip the app theme and persist it locally.",
+      group: "Actions",
+      keywords: ["theme", "light", "dark", "appearance"],
+      run: () => handleThemeToggle(),
+    },
+    {
+      id: "toggle-notifications",
+      label: notificationsEnabled
+        ? "Disable reply notifications"
+        : "Enable reply notifications",
+      description:
+        notificationPermission === "granted"
+          ? "Toggle browser notifications for completed background replies."
+          : "Request browser permission for completed background reply notifications.",
+      group: "Actions",
+      keywords: ["notifications", "notify", "alerts", "background", "pwa"],
+      run: () => void handleNotificationsToggle(),
+    },
+  ];
+  const visibleCommandItems = filterCommandItems(commandItems, commandQuery);
+  const groupedCommandItems = (["Jump", "Actions"] as const)
+    .map(
+      (group) =>
+        [
+          group,
+          visibleCommandItems.filter((command) => command.group === group),
+        ] as const
+    )
+    .filter(([, commands]) => commands.length > 0);
   const selectedCommand = visibleCommandItems[commandSelectionIndex];
 
   useEffect(() => {
@@ -613,11 +663,59 @@ export default function App() {
     notificationPermissionRef.current = notificationPermission;
   }, [notificationPermission]);
 
+  const appendConsoleEntry = useCallback(
+    (entry: StreamConsoleEntryViewModel | undefined): void => {
+      if (!entry) {
+        return;
+      }
+      setStreamConsoleEntries((current) => [...current, entry]);
+    },
+    []
+  );
+
+  const showScheduledTaskNotification = useCallback(
+    async (task: ScheduledTask, agentTitle?: string) => {
+      const icon = new URL(
+        `${import.meta.env.BASE_URL}favicon.svg`,
+        window.location.origin
+      ).toString();
+      const notification = buildScheduledTaskNotification({
+        agentTitle,
+        task,
+      });
+
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.getRegistration();
+        if (registration?.showNotification) {
+          await registration.showNotification(notification.title, {
+            badge: icon,
+            body: notification.body,
+            icon,
+            tag: notification.tag,
+          });
+          return;
+        }
+      }
+
+      if (!isNotificationSupported()) {
+        throw new Error("This browser does not support notifications.");
+      }
+
+      new Notification(notification.title, {
+        body: notification.body,
+        icon,
+        tag: notification.tag,
+      });
+    },
+    []
+  );
+
   useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) {
       return;
     }
+    timelineSyncKeyRef.current = timelineSyncKey;
     const previousMetrics = timelineMetricsRef.current;
     const shouldFollowLatest =
       forceAutoScrollTimelineRef.current ||
@@ -637,12 +735,7 @@ export default function App() {
       clientHeight: timeline.clientHeight,
       scrollHeight: timeline.scrollHeight,
     };
-  }, [
-    messages.length,
-    streaming.assistantText,
-    streaming.thinkingText,
-    streaming.sending,
-  ]);
+  }, [timelineSyncKey]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -748,11 +841,13 @@ export default function App() {
         });
     });
   }, [
+    appendConsoleEntry,
     agentsQuery.data,
     notificationPermission,
     notificationsEnabled,
     pendingScheduleNotifications,
     setLastScheduledRunNotification,
+    showScheduledTaskNotification,
   ]);
 
   useEffect(() => {
@@ -782,6 +877,66 @@ export default function App() {
     });
   }, [isCommandPaletteOpen, visibleCommandItems.length]);
 
+  const getDesktopDetailWidth = useCallback(
+    () => (window.innerWidth <= 1280 ? 280 : 320),
+    []
+  );
+  const clampDesktopPanelWidth = useCallback(
+    (
+      panel: ResizablePanel,
+      nextWidth: number,
+      widths = desktopPanelWidthsRef.current
+    ) => {
+      const limits = PANEL_WIDTH_LIMITS[panel];
+      let maxWidth: number = limits.max;
+      const shellWidth = appShellRef.current?.clientWidth;
+      if (shellWidth) {
+        const otherPanelWidth =
+          panel === "agents" ? widths.history : widths.agents;
+        const detailWidth = modelDetailsOpen ? getDesktopDetailWidth() : 0;
+        const gapCount = modelDetailsOpen ? 3 : 2;
+        const availableWidth =
+          shellWidth -
+          otherPanelWidth -
+          detailWidth -
+          MIN_CHAT_PANEL_WIDTH -
+          gapCount * DESKTOP_PANEL_GAP;
+        maxWidth = Math.min(maxWidth, availableWidth);
+      }
+      return Math.min(
+        Math.max(Math.round(nextWidth), limits.min),
+        Math.max(limits.min, maxWidth)
+      );
+    },
+    [getDesktopDetailWidth, modelDetailsOpen]
+  );
+  const normalizeDesktopPanelWidths = useCallback(
+    (widths: typeof desktopPanelWidths) => {
+      const agents = clampDesktopPanelWidth("agents", widths.agents, widths);
+      const history = clampDesktopPanelWidth("history", widths.history, {
+        ...widths,
+        agents,
+      });
+      return { agents, history };
+    },
+    [clampDesktopPanelWidth]
+  );
+  const updateDesktopPanelWidth = useCallback(
+    (panel: ResizablePanel, nextWidth: number) => {
+      setDesktopPanelWidths((current) => {
+        const normalized = normalizeDesktopPanelWidths({
+          ...current,
+          [panel]: clampDesktopPanelWidth(panel, nextWidth, current),
+        });
+        return normalized.agents === current.agents &&
+          normalized.history === current.history
+          ? current
+          : normalized;
+      });
+    },
+    [clampDesktopPanelWidth, normalizeDesktopPanelWidths]
+  );
+
   useEffect(() => {
     function syncDesktopPanelWidths() {
       if (
@@ -802,7 +957,7 @@ export default function App() {
     syncDesktopPanelWidths();
     window.addEventListener("resize", syncDesktopPanelWidths);
     return () => window.removeEventListener("resize", syncDesktopPanelWidths);
-  }, [modelDetailsOpen]);
+  }, [normalizeDesktopPanelWidths]);
 
   useEffect(() => {
     function stopPanelResize() {
@@ -842,7 +997,7 @@ export default function App() {
       window.removeEventListener("pointercancel", stopPanelResize);
       document.body.classList.remove("is-resizing-panels");
     };
-  }, [modelDetailsOpen]);
+  }, [updateDesktopPanelWidth]);
 
   function handleAppShellPointerDownCapture(
     event: ReactPointerEvent<HTMLDivElement>
@@ -878,71 +1033,6 @@ export default function App() {
     ) {
       document.activeElement.blur();
     }
-  }
-
-  function focusSection(
-    section: MobileSection,
-    options?: { focusTarget?: boolean }
-  ) {
-    if (section === "details" && !modelDetailsOpen) {
-      setModelDetailsOpen(true);
-    }
-    setMobileSection(section);
-    if (options?.focusTarget === false) {
-      return;
-    }
-    requestAnimationFrame(() => {
-      switch (section) {
-        case "agents":
-          newChatButtonRef.current?.focus();
-          break;
-        case "history":
-          recentHistoryButtonRef.current?.focus();
-          break;
-        case "chat":
-          composerInputRef.current?.focus();
-          break;
-        case "details":
-          modelDetailsToggleRef.current?.focus();
-          break;
-      }
-    });
-  }
-
-  function openCommandPalette() {
-    lastFocusedElementRef.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setHelpOpen(false);
-    setCommandQuery("");
-    setCommandPaletteOpen(true);
-  }
-
-  function closeCommandPalette(options?: { restoreFocus?: boolean }) {
-    setCommandPaletteOpen(false);
-    setCommandQuery("");
-    if (options?.restoreFocus === false) {
-      return;
-    }
-    requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
-  }
-
-  function openHelpDialog() {
-    lastFocusedElementRef.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setCommandPaletteOpen(false);
-    setHelpOpen(true);
-  }
-
-  function closeHelpDialog(options?: { restoreFocus?: boolean }) {
-    setHelpOpen(false);
-    if (options?.restoreFocus === false) {
-      return;
-    }
-    requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
   }
 
   function handleThemeToggle() {
@@ -1058,43 +1148,6 @@ export default function App() {
         timestamp: new Date().toISOString(),
         tone: "error",
       });
-    });
-  }
-
-  async function showScheduledTaskNotification(
-    task: ScheduledTask,
-    agentTitle?: string
-  ) {
-    const icon = new URL(
-      `${import.meta.env.BASE_URL}favicon.svg`,
-      window.location.origin
-    ).toString();
-    const notification = buildScheduledTaskNotification({
-      agentTitle,
-      task,
-    });
-
-    if ("serviceWorker" in navigator) {
-      const registration = await navigator.serviceWorker.getRegistration();
-      if (registration?.showNotification) {
-        await registration.showNotification(notification.title, {
-          badge: icon,
-          body: notification.body,
-          icon,
-          tag: notification.tag,
-        });
-        return;
-      }
-    }
-
-    if (!isNotificationSupported()) {
-      throw new Error("This browser does not support notifications.");
-    }
-
-    new Notification(notification.title, {
-      body: notification.body,
-      icon,
-      tag: notification.tag,
     });
   }
 
@@ -1222,59 +1275,6 @@ export default function App() {
     }
   }
 
-  function getDesktopDetailWidth() {
-    return window.innerWidth <= 1280 ? 280 : 320;
-  }
-
-  function clampDesktopPanelWidth(
-    panel: ResizablePanel,
-    nextWidth: number,
-    widths = desktopPanelWidthsRef.current
-  ) {
-    const limits = PANEL_WIDTH_LIMITS[panel];
-    let maxWidth: number = limits.max;
-    const shellWidth = appShellRef.current?.clientWidth;
-    if (shellWidth) {
-      const otherPanelWidth =
-        panel === "agents" ? widths.history : widths.agents;
-      const detailWidth = modelDetailsOpen ? getDesktopDetailWidth() : 0;
-      const gapCount = modelDetailsOpen ? 3 : 2;
-      const availableWidth =
-        shellWidth -
-        otherPanelWidth -
-        detailWidth -
-        MIN_CHAT_PANEL_WIDTH -
-        gapCount * DESKTOP_PANEL_GAP;
-      maxWidth = Math.min(maxWidth, availableWidth);
-    }
-    return Math.min(
-      Math.max(Math.round(nextWidth), limits.min),
-      Math.max(limits.min, maxWidth)
-    );
-  }
-
-  function normalizeDesktopPanelWidths(widths: typeof desktopPanelWidths) {
-    const agents = clampDesktopPanelWidth("agents", widths.agents, widths);
-    const history = clampDesktopPanelWidth("history", widths.history, {
-      ...widths,
-      agents,
-    });
-    return { agents, history };
-  }
-
-  function updateDesktopPanelWidth(panel: ResizablePanel, nextWidth: number) {
-    setDesktopPanelWidths((current) => {
-      const normalized = normalizeDesktopPanelWidths({
-        ...current,
-        [panel]: clampDesktopPanelWidth(panel, nextWidth, current),
-      });
-      return normalized.agents === current.agents &&
-        normalized.history === current.history
-        ? current
-        : normalized;
-    });
-  }
-
   function startPanelResize(
     panel: ResizablePanel,
     event: ReactPointerEvent<HTMLButtonElement>
@@ -1311,15 +1311,6 @@ export default function App() {
     }
     setMobileSection("chat");
     requestAnimationFrame(() => chatDetailsToggleRef.current?.focus());
-  }
-
-  function appendConsoleEntry(
-    entry: StreamConsoleEntryViewModel | undefined
-  ): void {
-    if (!entry) {
-      return;
-    }
-    setStreamConsoleEntries((current) => [...current, entry]);
   }
 
   function handleCommandSelection(command: CommandItem) {
@@ -1475,7 +1466,15 @@ export default function App() {
 
     window.addEventListener("keydown", handleGlobalKeydown);
     return () => window.removeEventListener("keydown", handleGlobalKeydown);
-  }, [isCommandPaletteOpen, isHelpOpen]);
+  }, [
+    closeCommandPalette,
+    closeHelpDialog,
+    focusSection,
+    isCommandPaletteOpen,
+    isHelpOpen,
+    openCommandPalette,
+    openHelpDialog,
+  ]);
 
   async function handleSend() {
     if (!selectedAgentId || !draft.trim() || threadDeleted) {

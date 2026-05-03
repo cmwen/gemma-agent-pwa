@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "@gemma-agent-pwa/contracts": "workspace:*",
-    "gray-matter": "latest"
+    "gray-matter": "^4.0.3"
   }
 }

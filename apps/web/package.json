@@ -15,18 +15,18 @@
     "@gemma-agent-pwa/contracts": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "dexie": "^4.2.1",
-    "react": "latest",
-    "react-dom": "latest",
-    "react-markdown": "latest",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "workbox-window": "^7.4.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "vite": "^7.1.12",
-    "vite-plugin-pwa": "latest"
+    "vite-plugin-pwa": "^1.2.0"
   }
 }
