@@ -4,8 +4,14 @@ const mockApiBaseUrl = "http://127.0.0.1:56012";
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async ({ request }) => {
+test.beforeEach(async ({ page, request }) => {
   await request.post(`${mockApiBaseUrl}/api/test/reset`);
+  await page.goto("/");
+  await page.evaluate(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+  });
+  await page.reload();
 });
 
 test("streams quick replies cleanly on mobile without horizontal overflow", async ({
@@ -19,9 +25,9 @@ test("streams quick replies cleanly on mobile without horizontal overflow", asyn
   await expect(page.getByRole("button", { name: "Chat" })).toBeVisible();
 
   await page.getByRole("button", { name: "Fast" }).click();
-  const composer = page.getByRole("textbox");
+  const composer = page.getByRole("textbox", { name: "Message composer" });
   await composer.fill("Summarize the mobile release plan.");
-  await composer.press("Control+Enter");
+  await page.getByRole("button", { name: "Send" }).click();
 
   const chatPanel = page.getByRole("main");
   await expect(
@@ -58,15 +64,78 @@ test("streams quick replies cleanly on mobile without horizontal overflow", asyn
   expect(codeOverflowWidth).toBeLessThanOrEqual(1);
 });
 
+test("keeps the mobile timeline scroll position when reading a long streamed reply", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.fill(
+    [
+      "Long mobile scroll request",
+      "",
+      "Please send a long mobile scroll response so I can review the earlier text while the reply is still streaming.",
+      "",
+      "long mobile scroll",
+    ].join("\n")
+  );
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const timeline = page.locator(".timeline");
+  await expect
+    .poll(() =>
+      timeline.evaluate(
+        (element) => element.scrollHeight - element.clientHeight
+      )
+    )
+    .toBeGreaterThan(400);
+  await expect
+    .poll(() =>
+      page
+        .locator(".message-card.assistant")
+        .last()
+        .evaluate(
+          (element) => element.textContent?.includes("Paragraph 5:") ?? false
+        )
+    )
+    .toBe(true);
+
+  await timeline.evaluate((element) => {
+    element.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        pointerType: "touch",
+      })
+    );
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+
+  await expect
+    .poll(() => timeline.evaluate((element) => element.scrollTop))
+    .toBeLessThanOrEqual(8);
+  await expect(composer).not.toBeFocused();
+  await page.waitForTimeout(300);
+
+  const finalScrollTop = await timeline.evaluate(
+    (element) => element.scrollTop
+  );
+  const maxScrollTop = await timeline.evaluate(
+    (element) => element.scrollHeight - element.clientHeight
+  );
+  expect(finalScrollTop).toBeLessThanOrEqual(8);
+  expect(maxScrollTop).toBeGreaterThan(400);
+});
+
 test("keeps reasoning traces readable on mobile after the final assistant response", async ({
   page,
 }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: "Think" }).click();
-  const composer = page.getByRole("textbox");
+  const composer = page.getByRole("textbox", { name: "Message composer" });
   await composer.fill("Explain the mobile rendering tradeoffs.");
-  await composer.press("Control+Enter");
+  await page.getByRole("button", { name: "Send" }).click();
 
   const assistantCard = page.locator(".message-card.assistant").last();
   await expect(assistantCard.getByText("thinking: on")).toBeVisible();
@@ -91,9 +160,11 @@ test("renders skill calls as expandable sections instead of raw markup", async (
 }) => {
   await page.goto("/");
 
-  const composer = page.getByRole("textbox");
-  await composer.fill("Use the release checklist skill.");
-  await composer.press("Control+Enter");
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.pressSequentially("Use the release checklist skill.");
+  const sendButton = page.getByRole("button", { name: "Send" });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
 
   const skillCall = page.locator(".skill-activity-details");
   await expect(skillCall).toBeVisible();
@@ -120,7 +191,7 @@ test("uses the thinking toggle without overwriting the selected preset budget", 
 
   const composer = page.getByRole("textbox", { name: "Message composer" });
   await composer.fill("Use the deep preset budget with thinking disabled.");
-  await composer.press("Control+Enter");
+  await page.getByRole("button", { name: "Send" }).click();
 
   const assistantCard = page.locator(".message-card.assistant").last();
   await expect(
@@ -248,7 +319,7 @@ test("hides the details panel when closed and supports soft-deleting chat histor
 
   const composer = page.getByRole("textbox", { name: "Message composer" });
   await composer.fill("Create a thread so history actions are available.");
-  await composer.press("Control+Enter");
+  await page.getByRole("button", { name: "Send" }).click();
   await expect(
     page.locator(".message-card.assistant").last().getByText("mobile: wrapped")
   ).toBeVisible();

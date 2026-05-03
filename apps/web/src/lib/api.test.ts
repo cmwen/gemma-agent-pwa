@@ -2,10 +2,15 @@ import type { ChatRequest, ChatSession } from "@gemma-agent-pwa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
+  createScheduledTask,
+  deleteScheduledTask as deleteScheduledTaskRequest,
   deleteSession,
+  getScheduledTasks,
   getSessions,
   restoreSession,
+  runScheduledTask,
   streamChat,
+  updateScheduledTask,
 } from "./api";
 
 afterEach(() => {
@@ -26,7 +31,8 @@ describe("session API helpers", () => {
     await getSessions("release-planner", "deleted");
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/agents/release-planner/sessions?state=deleted"
+      "/api/agents/release-planner/sessions?state=deleted",
+      undefined
     );
   });
 
@@ -53,6 +59,119 @@ describe("session API helpers", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agents/release-planner/sessions/session-1/restore",
       { method: "POST" }
+    );
+  });
+});
+
+describe("scheduled task API helpers", () => {
+  it("lists global scheduled tasks when no agent is selected", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })
+    );
+
+    await getScheduledTasks();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/schedules", undefined);
+  });
+
+  it("posts, patches, runs, and deletes scheduled tasks", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "task-1",
+            agentId: "release-planner",
+          }),
+          {
+            status: 201,
+            headers: {
+              "content-type": "application/json",
+            },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "task-1",
+            agentId: "release-planner",
+            enabled: false,
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "task-1",
+            agentId: "release-planner",
+            lastRunStatus: "success",
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }
+        )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await createScheduledTask("release-planner", {
+      agentId: "release-planner",
+      title: "Hourly digest",
+      prompt: "Summarize the latest activity.",
+      recurrence: "hourly",
+      minuteOfHour: 15,
+      timezone: "UTC",
+      enabled: true,
+      notifyOnCompletion: true,
+      sessionMode: "dedicated",
+    });
+    await updateScheduledTask("release-planner", "task-1", {
+      enabled: false,
+    });
+    await runScheduledTask("release-planner", "task-1");
+    await deleteScheduledTaskRequest("release-planner", "task-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/agents/release-planner/schedules",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/agents/release-planner/schedules/task-1",
+      expect.objectContaining({
+        method: "PATCH",
+      })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/agents/release-planner/schedules/task-1/run",
+      {
+        method: "POST",
+      }
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/agents/release-planner/schedules/task-1",
+      {
+        method: "DELETE",
+      }
     );
   });
 });

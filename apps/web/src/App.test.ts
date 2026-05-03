@@ -9,15 +9,20 @@ import {
   buildCompletionNotification,
   buildDetailPanelClassName,
   buildMessages,
+  buildScheduledTaskNotification,
   buildStreamConsoleEntry,
+  describeScheduledTask,
   filterCommandItems,
   formatNotificationPermissionLabel,
   formatTime,
+  getNewScheduledTaskNotifications,
   getNextFocusableIndex,
   getNotificationPermission,
   getPreferredTheme,
+  getSchedulePollingInterval,
   isEditableElement,
   isNotificationSupported,
+  isScrolledNearBottom,
   shouldBlurActiveEditableElementOnPointerDown,
   shouldSendCompletionNotification,
 } from "./app-utils";
@@ -243,6 +248,28 @@ describe("formatTime", () => {
   });
 });
 
+describe("isScrolledNearBottom", () => {
+  it("treats positions near the bottom threshold as still following the latest content", () => {
+    expect(
+      isScrolledNearBottom({
+        clientHeight: 600,
+        scrollHeight: 1200,
+        scrollTop: 552,
+      })
+    ).toBe(true);
+  });
+
+  it("returns false when the reader has scrolled meaningfully away from the latest content", () => {
+    expect(
+      isScrolledNearBottom({
+        clientHeight: 600,
+        scrollHeight: 1200,
+        scrollTop: 420,
+      })
+    ).toBe(false);
+  });
+});
+
 describe("applyPresetRuntimeConfig", () => {
   it("applies the selected preset defaults over previous runtime overrides", () => {
     expect(
@@ -350,11 +377,90 @@ describe("notification helpers", () => {
       tag: "gemma-agent-pwa-session-session-1",
     });
   });
+
+  it("builds scheduled task notifications and adaptive polling settings", () => {
+    const task = {
+      id: "schedule-1",
+      agentId: "release-planner",
+      title: "Daily summary",
+      prompt: "Summarize the latest activity.",
+      recurrence: "daily" as const,
+      minuteOfHour: 15,
+      hourOfDay: 9,
+      timezone: "UTC",
+      enabled: true,
+      notifyOnCompletion: true,
+      sessionMode: "dedicated" as const,
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+      nextRunAt: "2026-05-02T09:15:00.000Z",
+      recentRuns: [
+        {
+          runId: "run-1",
+          status: "success" as const,
+          trigger: "schedule" as const,
+          scheduledFor: "2026-05-01T09:15:00.000Z",
+          startedAt: "2026-05-01T09:15:00.000Z",
+          completedAt: "2026-05-01T09:15:10.000Z",
+          assistantSummary: "Top updates from the latest run.",
+        },
+      ],
+    };
+
+    expect(
+      buildScheduledTaskNotification({
+        agentTitle: "Release planner",
+        task,
+      })
+    ).toEqual({
+      title: "Daily summary finished",
+      body: "Top updates from the latest run.",
+      tag: "gemma-agent-pwa-schedule-schedule-1",
+    });
+    expect(describeScheduledTask(task)).toBe("Every day at 09:15");
+    expect(
+      getSchedulePollingInterval({
+        isOnline: true,
+        documentHidden: false,
+        notificationsEnabled: false,
+      })
+    ).toBe(60_000);
+    expect(
+      getSchedulePollingInterval({
+        isOnline: true,
+        documentHidden: true,
+        notificationsEnabled: true,
+      })
+    ).toBe(300_000);
+    const latestRun = task.recentRuns[0];
+    expect(latestRun).toBeDefined();
+    expect(
+      getNewScheduledTaskNotifications(
+        [
+          task,
+          {
+            ...task,
+            id: "schedule-2",
+            notifyOnCompletion: false,
+            recentRuns: latestRun
+              ? [
+                  {
+                    ...latestRun,
+                    runId: "run-2",
+                  },
+                ]
+              : [],
+          },
+        ],
+        { "schedule-2": "run-2" }
+      ).map((entry) => entry.id)
+    ).toEqual(["schedule-1"]);
+  });
 });
 
 describe("mobile pointer helpers", () => {
   function stubPointerHelperGlobals() {
-    class TestNode {
+    class TestNode extends EventTarget {
       children = new Set<TestNode>();
     }
 
@@ -369,7 +475,7 @@ describe("mobile pointer helpers", () => {
         }
       }
 
-      contains(target: Node) {
+      contains(target: TestNode | null) {
         if (!(target instanceof TestNode)) {
           return false;
         }
@@ -419,10 +525,10 @@ describe("mobile pointer helpers", () => {
 
     expect(
       shouldBlurActiveEditableElementOnPointerDown({
-        activeElement,
+        activeElement: activeElement as unknown as Element,
         desktopBreakpoint: 981,
         pointerType: "touch",
-        target,
+        target: target as unknown as EventTarget,
         viewportWidth: 480,
       })
     ).toBe(true);
@@ -436,30 +542,30 @@ describe("mobile pointer helpers", () => {
 
     expect(
       shouldBlurActiveEditableElementOnPointerDown({
-        activeElement: textarea,
+        activeElement: textarea as unknown as Element,
         desktopBreakpoint: 981,
         pointerType: "touch",
-        target: nestedTarget,
+        target: nestedTarget as unknown as EventTarget,
         viewportWidth: 480,
       })
     ).toBe(false);
 
     expect(
       shouldBlurActiveEditableElementOnPointerDown({
-        activeElement: textarea,
+        activeElement: textarea as unknown as Element,
         desktopBreakpoint: 981,
         pointerType: "mouse",
-        target: testDom.createDiv(),
+        target: testDom.createDiv() as unknown as EventTarget,
         viewportWidth: 480,
       })
     ).toBe(false);
 
     expect(
       shouldBlurActiveEditableElementOnPointerDown({
-        activeElement: textarea,
+        activeElement: textarea as unknown as Element,
         desktopBreakpoint: 981,
         pointerType: "touch",
-        target: testDom.createDiv(),
+        target: testDom.createDiv() as unknown as EventTarget,
         viewportWidth: 1200,
       })
     ).toBe(false);
@@ -475,10 +581,10 @@ describe("mobile pointer helpers", () => {
 
     expect(
       shouldBlurActiveEditableElementOnPointerDown({
-        activeElement: textarea,
+        activeElement: textarea as unknown as Element,
         desktopBreakpoint: 981,
         pointerType: "touch",
-        target,
+        target: target as unknown as EventTarget,
         viewportWidth: 480,
       })
     ).toBe(false);
@@ -566,8 +672,14 @@ describe("isEditableElement", () => {
     vi.stubGlobal("HTMLTextAreaElement", FakeTextArea);
     vi.stubGlobal("HTMLSelectElement", FakeSelect);
 
-    expect(isEditableElement(new FakeTextArea())).toBe(true);
-    expect(isEditableElement(new FakeSelect())).toBe(true);
-    expect(isEditableElement(new FakeButton())).toBe(false);
+    expect(
+      isEditableElement(new FakeTextArea() as unknown as EventTarget)
+    ).toBe(true);
+    expect(isEditableElement(new FakeSelect() as unknown as EventTarget)).toBe(
+      true
+    );
+    expect(isEditableElement(new FakeButton() as unknown as EventTarget)).toBe(
+      false
+    );
   });
 });

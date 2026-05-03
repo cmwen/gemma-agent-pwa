@@ -13,6 +13,9 @@ import type {
   ChatTurn,
   HealthStatus,
   ModelDescriptor,
+  ScheduledTask,
+  ScheduledTaskCreate,
+  ScheduledTaskUpdate,
   SessionDeleteMode,
   SessionListState,
 } from "@gemma-agent-pwa/contracts";
@@ -80,6 +83,70 @@ export async function getSession(
   return fetchJson<ChatSession>(
     `${API_ROOT}/agents/${agentId}/sessions/${sessionId}`
   );
+}
+
+export async function getScheduledTasks(
+  agentId?: string
+): Promise<ScheduledTask[]> {
+  return fetchJson<ScheduledTask[]>(
+    agentId
+      ? `${API_ROOT}/agents/${agentId}/schedules`
+      : `${API_ROOT}/schedules`
+  );
+}
+
+export async function createScheduledTask(
+  agentId: string,
+  input: ScheduledTaskCreate
+): Promise<ScheduledTask> {
+  return fetchJsonWithInit<ScheduledTask>(
+    `${API_ROOT}/agents/${agentId}/schedules`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function updateScheduledTask(
+  agentId: string,
+  taskId: string,
+  input: ScheduledTaskUpdate
+): Promise<ScheduledTask> {
+  return fetchJsonWithInit<ScheduledTask>(
+    `${API_ROOT}/agents/${agentId}/schedules/${taskId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function runScheduledTask(
+  agentId: string,
+  taskId: string
+): Promise<ScheduledTask> {
+  return fetchJsonWithInit<ScheduledTask>(
+    `${API_ROOT}/agents/${agentId}/schedules/${taskId}/run`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export async function deleteScheduledTask(
+  agentId: string,
+  taskId: string
+): Promise<void> {
+  await fetchOk(`${API_ROOT}/agents/${agentId}/schedules/${taskId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function deleteSession(
@@ -467,7 +534,14 @@ function createId(prefix: string): string {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+  return fetchJsonWithInit<T>(url);
+}
+
+async function fetchJsonWithInit<T>(
+  url: string,
+  init?: RequestInit
+): Promise<T> {
+  const response = await fetch(url, init);
   if (!response.ok) {
     throw new Error(await getResponseErrorMessage(response, "Request failed"));
   }

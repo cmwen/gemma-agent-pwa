@@ -44,6 +44,10 @@ import {
   resolveWritableSession,
 } from "./chat-session.js";
 import { getLmStudioModelCatalog, listLmStudioModels } from "./lmstudio.js";
+import {
+  registerScheduledTaskRoutes,
+  startScheduledTaskRunner,
+} from "./scheduled-tasks.js";
 
 const workspace = await resolveWorkspace();
 const app = new Hono();
@@ -54,7 +58,7 @@ app.use(
   cors({
     origin: (origin) => (isAllowedCorsOrigin(origin) ? origin : null),
     allowHeaders: ["Content-Type"],
-    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
   })
 );
 
@@ -139,6 +143,8 @@ app.delete("/api/agents/:agentId/sessions/:sessionId", async (context) => {
   }
   return context.body(null, 204);
 });
+
+registerScheduledTaskRoutes(app, workspace);
 
 app.post(
   "/api/agents/:agentId/sessions/:sessionId/restore",
@@ -315,6 +321,7 @@ serve(
     console.info(`Gemma Agent API listening on http://localhost:${port}`);
   }
 );
+startScheduledTaskRunner({ workspace });
 
 function chooseDefaultModel(
   models: ModelDescriptor[]

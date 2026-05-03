@@ -4,6 +4,7 @@ import {
   type ChatTurn,
   getPresetById,
   type PartialChatRuntimeConfig,
+  type ScheduledTask,
 } from "@gemma-agent-pwa/contracts";
 
 interface StreamingStateSnapshot {
@@ -25,6 +26,13 @@ export interface StreamConsoleEntry {
   summary: string;
   timestamp: string;
   tone: "info" | "success" | "error";
+}
+
+interface ScrollPositionMetrics {
+  clientHeight: number;
+  scrollHeight: number;
+  scrollTop: number;
+  threshold?: number;
 }
 
 export interface StreamSkillActivity {
@@ -52,6 +60,11 @@ interface CompletionNotificationContent {
   body: string;
   tag: string;
   title: string;
+}
+
+interface ScheduledTaskNotificationInput {
+  agentTitle?: string;
+  task: ScheduledTask;
 }
 
 export function buildMessages(
@@ -200,6 +213,72 @@ export function buildCompletionNotification({
   };
 }
 
+export function buildScheduledTaskNotification({
+  agentTitle,
+  task,
+}: ScheduledTaskNotificationInput): CompletionNotificationContent {
+  const latestRun = task.recentRuns[0];
+  const title = `${task.title} finished`;
+  const body = latestRun?.assistantSummary
+    ? summarizeNotificationBody(latestRun.assistantSummary)
+    : `Scheduled run completed for ${agentTitle?.trim() || task.agentId}.`;
+  return {
+    title,
+    body,
+    tag: `gemma-agent-pwa-schedule-${task.id}`,
+  };
+}
+
+export function describeScheduledTask(
+  task: Pick<
+    ScheduledTask,
+    "dayOfWeek" | "hourOfDay" | "minuteOfHour" | "recurrence"
+  >
+): string {
+  const minute = task.minuteOfHour.toString().padStart(2, "0");
+  switch (task.recurrence) {
+    case "hourly":
+      return `Every hour at :${minute}`;
+    case "daily":
+      return `Every day at ${String(task.hourOfDay ?? 0).padStart(2, "0")}:${minute}`;
+    case "weekly":
+      return `Every ${WEEKDAY_LABELS[task.dayOfWeek ?? 0]} at ${String(
+        task.hourOfDay ?? 0
+      ).padStart(2, "0")}:${minute}`;
+  }
+}
+
+export function getSchedulePollingInterval(options: {
+  documentHidden: boolean;
+  isOnline: boolean;
+  notificationsEnabled: boolean;
+}): false | number {
+  if (!options.isOnline) {
+    return false;
+  }
+  if (!options.documentHidden) {
+    return 60_000;
+  }
+  return options.notificationsEnabled ? 300_000 : false;
+}
+
+export function getNewScheduledTaskNotifications(
+  tasks: ScheduledTask[],
+  seenRunIds: Record<string, string>
+): ScheduledTask[] {
+  return tasks.filter((task) => {
+    if (!task.notifyOnCompletion) {
+      return false;
+    }
+    const latestRun = task.recentRuns[0];
+    return (
+      latestRun?.status === "success" &&
+      Boolean(latestRun.completedAt) &&
+      seenRunIds[task.id] !== latestRun.runId
+    );
+  });
+}
+
 export function filterCommandItems<T extends CommandSearchableItem>(
   commands: T[],
   query: string
@@ -298,6 +377,15 @@ export function buildStreamConsoleEntry(
   }
 }
 
+export function isScrolledNearBottom({
+  clientHeight,
+  scrollHeight,
+  scrollTop,
+  threshold = 48,
+}: ScrollPositionMetrics): boolean {
+  return scrollHeight - clientHeight - scrollTop <= threshold;
+}
+
 export function isEditableElement(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -375,3 +463,13 @@ function summarizeNotificationBody(markdown?: string): string {
     ? plainText
     : `${plainText.slice(0, 137).trimEnd()}...`;
 }
+
+const WEEKDAY_LABELS = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;

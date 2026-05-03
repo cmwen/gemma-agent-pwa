@@ -212,6 +212,134 @@ export const llmSessionStatsSchema = z.object({
 });
 export type LlmSessionStats = z.infer<typeof llmSessionStatsSchema>;
 
+export const scheduledTaskRecurrenceSchema = z.enum([
+  "hourly",
+  "daily",
+  "weekly",
+]);
+export type ScheduledTaskRecurrence = z.infer<
+  typeof scheduledTaskRecurrenceSchema
+>;
+
+export const scheduledTaskSessionModeSchema = z.enum(["dedicated", "fresh"]);
+export type ScheduledTaskSessionMode = z.infer<
+  typeof scheduledTaskSessionModeSchema
+>;
+
+export const scheduledTaskRunStatusSchema = z.enum([
+  "running",
+  "success",
+  "error",
+]);
+export type ScheduledTaskRunStatus = z.infer<
+  typeof scheduledTaskRunStatusSchema
+>;
+
+export const scheduledTaskRunTriggerSchema = z.enum([
+  "schedule",
+  "manual",
+  "catch-up",
+]);
+export type ScheduledTaskRunTrigger = z.infer<
+  typeof scheduledTaskRunTriggerSchema
+>;
+
+export const scheduledTaskRunSchema = z.object({
+  runId: z.string().min(1),
+  status: scheduledTaskRunStatusSchema,
+  trigger: scheduledTaskRunTriggerSchema,
+  scheduledFor: z.string().min(1),
+  startedAt: z.string().min(1),
+  completedAt: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+  assistantSummary: z.string().min(1).optional(),
+  errorMessage: z.string().min(1).optional(),
+});
+export type ScheduledTaskRun = z.infer<typeof scheduledTaskRunSchema>;
+
+const scheduledTaskBaseSchema = z.object({
+  agentId: z.string().min(1),
+  title: z.string().trim().min(1).max(100),
+  prompt: z.string().trim().min(1).max(8_000),
+  recurrence: scheduledTaskRecurrenceSchema,
+  minuteOfHour: z.number().int().min(0).max(59),
+  hourOfDay: z.number().int().min(0).max(23).optional(),
+  dayOfWeek: z.number().int().min(0).max(6).optional(),
+  timezone: z.string().trim().min(1),
+  enabled: z.boolean().default(true),
+  notifyOnCompletion: z.boolean().default(true),
+  sessionMode: scheduledTaskSessionModeSchema.default("dedicated"),
+});
+
+export const scheduledTaskSchema = scheduledTaskBaseSchema
+  .extend({
+    id: z.string().min(1),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+    nextRunAt: z.string().min(1),
+    lastRunAt: z.string().min(1).optional(),
+    lastRunStatus: scheduledTaskRunStatusSchema.optional(),
+    lastRunError: z.string().min(1).optional(),
+    lastSessionId: z.string().min(1).optional(),
+    lastAssistantSummary: z.string().min(1).optional(),
+    runningAt: z.string().min(1).optional(),
+    recentRuns: z.array(scheduledTaskRunSchema).default([]),
+  })
+  .superRefine((task, context) => {
+    if (task.recurrence !== "hourly" && task.hourOfDay === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Daily and weekly schedules require an hour of day.",
+        path: ["hourOfDay"],
+      });
+    }
+    if (task.recurrence !== "weekly" && task.dayOfWeek !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Only weekly schedules can set a day of week.",
+        path: ["dayOfWeek"],
+      });
+    }
+    if (task.recurrence === "weekly" && task.dayOfWeek === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Weekly schedules require a day of week.",
+        path: ["dayOfWeek"],
+      });
+    }
+  });
+export type ScheduledTask = z.infer<typeof scheduledTaskSchema>;
+
+export const scheduledTaskCreateSchema = scheduledTaskBaseSchema.superRefine(
+  (task, context) => {
+    if (task.recurrence !== "hourly" && task.hourOfDay === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Daily and weekly schedules require an hour of day.",
+        path: ["hourOfDay"],
+      });
+    }
+    if (task.recurrence !== "weekly" && task.dayOfWeek !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Only weekly schedules can set a day of week.",
+        path: ["dayOfWeek"],
+      });
+    }
+    if (task.recurrence === "weekly" && task.dayOfWeek === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Weekly schedules require a day of week.",
+        path: ["dayOfWeek"],
+      });
+    }
+  }
+);
+export type ScheduledTaskCreate = z.infer<typeof scheduledTaskCreateSchema>;
+
+export const scheduledTaskUpdateSchema = scheduledTaskBaseSchema.partial();
+export type ScheduledTaskUpdate = z.infer<typeof scheduledTaskUpdateSchema>;
+
 export const chatTurnSchema = z.object({
   messageId: z.string().min(1),
   sender: senderSchema,
@@ -276,6 +404,7 @@ export const chatRequestSchema = z.object({
   title: z.string().min(1).optional(),
   prompt: z.string().min(1),
   config: partialChatRuntimeConfigSchema.optional(),
+  scheduledTaskId: z.string().min(1).optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

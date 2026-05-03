@@ -14,16 +14,17 @@ React + Vite PWA frontend for browsing agents, managing chat history, and stream
 
 - `src/App.tsx`: top-level queries, layout, streaming state, and keyboard interactions
 - `src/lib/api.ts`: typed API helpers and NDJSON stream parsing
-- `src/lib/store.ts`: selected agent/session state, drafts, and theme persistence
+- `src/lib/store.ts`: selected agent/session state, drafts, theme persistence, and schedule notification markers
 - `src/app-utils.ts`: presentation helpers used across the app shell
 - `src/styles.css`: responsive layout and theme styles
 
 ## Data flow
 
-1. React Query loads health, model, agent, and session data from the API.
+1. React Query loads health, model, agent, session, and scheduled-task data from the API.
 2. `streamChat` posts a `ChatRequest` and parses streamed `ChatStreamEvent` lines.
 3. Incoming events update the live thread, details console, and cached session data.
-4. Zustand persists lightweight UI state such as selected sessions, drafts, and theme mode.
+4. Scheduled-task completion polling slows down in the background so the PWA does not burn battery on mobile.
+5. Zustand persists lightweight UI state such as selected sessions, drafts, theme mode, and the last scheduled run that has already been surfaced locally.
 
 ## Local development
 

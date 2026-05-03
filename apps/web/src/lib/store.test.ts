@@ -10,6 +10,7 @@ beforeEach(() => {
   useAppStore.setState({
     selectedAgentId: undefined,
     selectedSessionIds: {},
+    lastScheduledRunNotifications: {},
     drafts: {},
     themeMode: "dark",
     modelDetailsOpen: false,
@@ -58,5 +59,15 @@ describe("notification preference", () => {
     useAppStore.getState().setNotificationsEnabled(true);
 
     expect(useAppStore.getState().notificationsEnabled).toBe(true);
+  });
+
+  it("tracks which scheduled run was already surfaced", () => {
+    useAppStore
+      .getState()
+      .setLastScheduledRunNotification("schedule-1", "run-1");
+
+    expect(useAppStore.getState().lastScheduledRunNotifications).toEqual({
+      "schedule-1": "run-1",
+    });
   });
 });

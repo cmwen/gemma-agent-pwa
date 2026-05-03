@@ -7,6 +7,9 @@ import {
   GEMMA_PRESETS,
   getPresetById,
   type PartialChatRuntimeConfig,
+  type ScheduledTask,
+  type ScheduledTaskCreate,
+  type ScheduledTaskUpdate,
 } from "@gemma-agent-pwa/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -27,29 +30,39 @@ import {
   buildCompletionNotification,
   buildDetailPanelClassName,
   buildMessages,
+  buildScheduledTaskNotification,
   buildStreamConsoleEntry,
+  describeScheduledTask,
   filterCommandItems,
   formatNotificationPermissionLabel,
   formatTime,
+  getNewScheduledTaskNotifications,
   getNextFocusableIndex,
   getNextTheme,
   getNotificationPermission,
+  getSchedulePollingInterval,
   isEditableElement,
   isNotificationSupported,
+  isScrolledNearBottom,
   type StreamSkillActivity,
   shouldBlurActiveEditableElementOnPointerDown,
   shouldSendCompletionNotification,
 } from "./app-utils";
 import {
+  createScheduledTask as createScheduledTaskRequest,
+  deleteScheduledTask as deleteScheduledTaskRequest,
   deleteSession as deleteSessionRequest,
   getAgent,
   getAgents,
   getHealth,
   getModels,
+  getScheduledTasks,
   getSession,
   getSessions,
   restoreSession as restoreSessionRequest,
+  runScheduledTask as runScheduledTaskRequest,
   streamChat,
+  updateScheduledTask as updateScheduledTaskRequest,
 } from "./lib/api";
 import {
   buildDraftKey,
@@ -84,6 +97,19 @@ interface StreamConsoleEntryViewModel {
   tone: "info" | "success" | "error";
 }
 
+interface ScheduleDraftState {
+  title: string;
+  prompt: string;
+  recurrence: ScheduledTask["recurrence"];
+  minuteOfHour: string;
+  hourOfDay: string;
+  dayOfWeek: string;
+  sessionMode: ScheduledTask["sessionMode"];
+  notifyOnCompletion: boolean;
+  enabled: boolean;
+  timezone: string;
+}
+
 type MobileSection = "agents" | "history" | "chat" | "details";
 type HistoryView = "active" | "deleted";
 type SessionAction = "soft-delete" | "restore" | "permanent-delete";
@@ -111,11 +137,23 @@ const PANEL_WIDTH_LIMITS = {
     max: 520,
   },
 } as const;
+const WEEKDAY_OPTIONS = [
+  { label: "Sunday", value: "0" },
+  { label: "Monday", value: "1" },
+  { label: "Tuesday", value: "2" },
+  { label: "Wednesday", value: "3" },
+  { label: "Thursday", value: "4" },
+  { label: "Friday", value: "5" },
+  { label: "Saturday", value: "6" },
+] as const;
 
 export default function App() {
   const queryClient = useQueryClient();
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const selectedSessionIds = useAppStore((state) => state.selectedSessionIds);
+  const lastScheduledRunNotifications = useAppStore(
+    (state) => state.lastScheduledRunNotifications
+  );
   const drafts = useAppStore((state) => state.drafts);
   const themeMode = useAppStore((state) => state.themeMode);
   const modelDetailsOpen = useAppStore((state) => state.modelDetailsOpen);
@@ -125,6 +163,9 @@ export default function App() {
   const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
   const setSelectedSessionId = useAppStore(
     (state) => state.setSelectedSessionId
+  );
+  const setLastScheduledRunNotification = useAppStore(
+    (state) => state.setLastScheduledRunNotification
   );
   const setDraft = useAppStore((state) => state.setDraft);
   const setThemeMode = useAppStore((state) => state.setThemeMode);
@@ -136,13 +177,17 @@ export default function App() {
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
     {}
   );
+  const [runtimeConfigDirty, setRuntimeConfigDirty] = useState(false);
   const [historyView, setHistoryView] = useState<HistoryView>("active");
   const [mobileSection, setMobileSection] = useState<MobileSection>("chat");
   const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [isHelpOpen, setHelpOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandSelectionIndex, setCommandSelectionIndex] = useState(0);
-  const [desktopPanelWidths, setDesktopPanelWidths] = useState({
+  const [desktopPanelWidths, setDesktopPanelWidths] = useState<{
+    agents: number;
+    history: number;
+  }>({
     agents: PANEL_WIDTH_LIMITS.agents.defaultWidth,
     history: PANEL_WIDTH_LIMITS.history.defaultWidth,
   });
@@ -150,6 +195,19 @@ export default function App() {
     getNotificationPermission()
   );
   const [notificationError, setNotificationError] = useState<string>();
+  const [scheduleError, setScheduleError] = useState<string>();
+  const [scheduleEditorOpen, setScheduleEditorOpen] = useState(false);
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+  const [editingScheduleId, setEditingScheduleId] = useState<string>();
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine
+  );
+  const [isDocumentHidden, setDocumentHidden] = useState(
+    typeof document === "undefined" ? false : document.hidden
+  );
+  const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraftState>(
+    createScheduleDraftState()
+  );
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
@@ -178,6 +236,15 @@ export default function App() {
   const desktopPanelWidthsRef = useRef(desktopPanelWidths);
   const notificationsEnabledRef = useRef(notificationsEnabled);
   const notificationPermissionRef = useRef(notificationPermission);
+  const runtimeConfigSourceKeyRef = useRef<string>("");
+  const forceAutoScrollTimelineRef = useRef(true);
+  const timelineMetricsRef = useRef<
+    | {
+        clientHeight: number;
+        scrollHeight: number;
+      }
+    | undefined
+  >(undefined);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -193,6 +260,17 @@ export default function App() {
     queryKey: ["agents"],
     queryFn: getAgents,
   });
+  const schedulesQuery = useQuery({
+    queryKey: ["scheduled-tasks"],
+    queryFn: () => getScheduledTasks(),
+    retry: 1,
+    refetchInterval: getSchedulePollingInterval({
+      documentHidden: isDocumentHidden,
+      isOnline,
+      notificationsEnabled,
+    }),
+    refetchIntervalInBackground: notificationsEnabled,
+  });
 
   useEffect(() => {
     if (!selectedAgentId && agentsQuery.data?.[0]) {
@@ -203,6 +281,21 @@ export default function App() {
   const selectedAgent = useMemo(
     () => agentsQuery.data?.find((agent) => agent.id === selectedAgentId),
     [agentsQuery.data, selectedAgentId]
+  );
+  const selectedAgentSchedules = useMemo(
+    () =>
+      (schedulesQuery.data ?? []).filter(
+        (task) => task.agentId === selectedAgentId
+      ),
+    [schedulesQuery.data, selectedAgentId]
+  );
+  const pendingScheduleNotifications = useMemo(
+    () =>
+      getNewScheduledTaskNotifications(
+        schedulesQuery.data ?? [],
+        lastScheduledRunNotifications
+      ),
+    [lastScheduledRunNotifications, schedulesQuery.data]
   );
 
   const agentDetailQuery = useQuery({
@@ -280,6 +373,7 @@ export default function App() {
 
   const thread =
     liveThread?.sessionId === activeSessionId ? liveThread : sessionQuery.data;
+  const runtimeConfigSourceKey = `${selectedAgentId ?? "none"}:${thread?.sessionId ?? "new"}`;
 
   useEffect(() => {
     const agentConfig = agentDetailQuery.data?.runtimeConfig;
@@ -288,7 +382,7 @@ export default function App() {
       modelsQuery.data?.find((model) => /gemma-4/i.test(model.id))?.id ??
       modelsQuery.data?.find((model) => model.isGemma)?.id ??
       modelsQuery.data?.[0]?.id;
-    setRuntimeConfig({
+    const nextRuntimeConfig = {
       presetId:
         sessionConfig?.presetId ??
         agentConfig?.presetId ??
@@ -303,10 +397,31 @@ export default function App() {
         sessionConfig?.contextWindowSize ?? agentConfig?.contextWindowSize,
       temperature: sessionConfig?.temperature ?? agentConfig?.temperature,
       topP: sessionConfig?.topP ?? agentConfig?.topP,
-    });
-    setLiveThread(undefined);
-    setStreaming({ sending: false, skillActivities: [] });
-  }, [agentDetailQuery.data, thread?.sessionId, modelsQuery.data]);
+    };
+    const sourceChanged =
+      runtimeConfigSourceKeyRef.current !== runtimeConfigSourceKey;
+
+    runtimeConfigSourceKeyRef.current = runtimeConfigSourceKey;
+    if (sourceChanged) {
+      forceAutoScrollTimelineRef.current = true;
+      timelineMetricsRef.current = undefined;
+      setRuntimeConfigDirty(false);
+      setLiveThread(undefined);
+      setStreaming({ sending: false, skillActivities: [] });
+    }
+
+    if (runtimeConfigDirty && !sourceChanged) {
+      return;
+    }
+
+    setRuntimeConfig(nextRuntimeConfig);
+  }, [
+    agentDetailQuery.data,
+    modelsQuery.data,
+    runtimeConfigDirty,
+    runtimeConfigSourceKey,
+    thread?.runtimeConfig,
+  ]);
 
   const draftKey = buildDraftKey(selectedAgentId, activeSessionId);
   const draft = drafts[draftKey] ?? "";
@@ -383,6 +498,15 @@ export default function App() {
         keywords: ["new", "chat", "thread"],
         shortcut: "N",
         run: () => handleNewChat(),
+      },
+      {
+        id: "open-schedules",
+        label: "Manage scheduled tasks",
+        description:
+          "Open the details rail and create or edit recurring hourly, daily, and weekly tasks.",
+        group: "Actions",
+        keywords: ["schedule", "scheduled", "tasks", "automation", "reminders"],
+        run: () => openScheduleEditor(),
       },
       {
         id: "open-help",
@@ -494,7 +618,25 @@ export default function App() {
     if (!timeline) {
       return;
     }
-    timeline.scrollTop = timeline.scrollHeight;
+    const previousMetrics = timelineMetricsRef.current;
+    const shouldFollowLatest =
+      forceAutoScrollTimelineRef.current ||
+      !previousMetrics ||
+      isScrolledNearBottom({
+        clientHeight: previousMetrics.clientHeight,
+        scrollHeight: previousMetrics.scrollHeight,
+        scrollTop: timeline.scrollTop,
+      });
+
+    if (shouldFollowLatest) {
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+
+    forceAutoScrollTimelineRef.current = false;
+    timelineMetricsRef.current = {
+      clientHeight: timeline.clientHeight,
+      scrollHeight: timeline.scrollHeight,
+    };
   }, [
     messages.length,
     streaming.assistantText,
@@ -505,6 +647,25 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
   }, [themeMode]);
+
+  useEffect(() => {
+    function syncEnvironment() {
+      setDocumentHidden(document.hidden);
+      setIsOnline(navigator.onLine);
+    }
+
+    syncEnvironment();
+    window.addEventListener("online", syncEnvironment);
+    window.addEventListener("offline", syncEnvironment);
+    window.addEventListener("focus", syncEnvironment);
+    document.addEventListener("visibilitychange", syncEnvironment);
+    return () => {
+      window.removeEventListener("online", syncEnvironment);
+      window.removeEventListener("offline", syncEnvironment);
+      window.removeEventListener("focus", syncEnvironment);
+      document.removeEventListener("visibilitychange", syncEnvironment);
+    };
+  }, []);
 
   useEffect(() => {
     function syncNotificationPermission() {
@@ -533,6 +694,66 @@ export default function App() {
       setNotificationsEnabled(false);
     }
   }, [notificationPermission, notificationsEnabled, setNotificationsEnabled]);
+
+  useEffect(() => {
+    const badgeCount = pendingScheduleNotifications.length;
+    if (
+      "setAppBadge" in navigator &&
+      typeof navigator.setAppBadge === "function"
+    ) {
+      void navigator.setAppBadge(badgeCount).catch(() => {});
+    } else if (
+      badgeCount === 0 &&
+      "clearAppBadge" in navigator &&
+      typeof navigator.clearAppBadge === "function"
+    ) {
+      void navigator.clearAppBadge().catch(() => {});
+    }
+
+    if (
+      pendingScheduleNotifications.length === 0 ||
+      !shouldSendCompletionNotification({
+        notificationsEnabled,
+        permission: notificationPermission,
+        documentHidden: document.hidden,
+        windowHasFocus: document.hasFocus(),
+      })
+    ) {
+      return;
+    }
+
+    pendingScheduleNotifications.forEach((task) => {
+      const latestRun = task.recentRuns[0];
+      if (!latestRun) {
+        return;
+      }
+      const agentTitle = agentsQuery.data?.find(
+        (agent) => agent.id === task.agentId
+      )?.title;
+      void showScheduledTaskNotification(task, agentTitle)
+        .then(() => {
+          setLastScheduledRunNotification(task.id, latestRun.runId);
+        })
+        .catch((error) => {
+          const message =
+            error instanceof Error ? error.message : "Notification failed.";
+          setNotificationError(message);
+          appendConsoleEntry({
+            id: `${new Date().toISOString()}-schedule-notification-error`,
+            summary: "Schedule notification error",
+            detail: message,
+            timestamp: new Date().toISOString(),
+            tone: "error",
+          });
+        });
+    });
+  }, [
+    agentsQuery.data,
+    notificationPermission,
+    notificationsEnabled,
+    pendingScheduleNotifications,
+    setLastScheduledRunNotification,
+  ]);
 
   useEffect(() => {
     if (!isCommandPaletteOpen) {
@@ -645,6 +866,20 @@ export default function App() {
     }
   }
 
+  function handleTimelinePointerDownCapture(
+    event: ReactPointerEvent<HTMLDivElement>
+  ) {
+    forceAutoScrollTimelineRef.current = false;
+    if (
+      event.pointerType === "touch" &&
+      window.innerWidth < DESKTOP_BREAKPOINT &&
+      document.activeElement instanceof HTMLElement &&
+      isEditableElement(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
+  }
+
   function focusSection(
     section: MobileSection,
     options?: { focusTarget?: boolean }
@@ -712,6 +947,15 @@ export default function App() {
 
   function handleThemeToggle() {
     setThemeMode(getNextTheme(themeMode));
+  }
+
+  function updateRuntimeConfigState(
+    updater:
+      | PartialChatRuntimeConfig
+      | ((current: PartialChatRuntimeConfig) => PartialChatRuntimeConfig)
+  ) {
+    setRuntimeConfigDirty(true);
+    setRuntimeConfig(updater);
   }
 
   async function handleNotificationsToggle() {
@@ -817,6 +1061,167 @@ export default function App() {
     });
   }
 
+  async function showScheduledTaskNotification(
+    task: ScheduledTask,
+    agentTitle?: string
+  ) {
+    const icon = new URL(
+      `${import.meta.env.BASE_URL}favicon.svg`,
+      window.location.origin
+    ).toString();
+    const notification = buildScheduledTaskNotification({
+      agentTitle,
+      task,
+    });
+
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration?.showNotification) {
+        await registration.showNotification(notification.title, {
+          badge: icon,
+          body: notification.body,
+          icon,
+          tag: notification.tag,
+        });
+        return;
+      }
+    }
+
+    if (!isNotificationSupported()) {
+      throw new Error("This browser does not support notifications.");
+    }
+
+    new Notification(notification.title, {
+      body: notification.body,
+      icon,
+      tag: notification.tag,
+    });
+  }
+
+  function openScheduleEditor(task?: ScheduledTask) {
+    setScheduleError(undefined);
+    setEditingScheduleId(task?.id);
+    setScheduleDraft(
+      task ? createScheduleDraftState(task) : createScheduleDraftState()
+    );
+    setScheduleEditorOpen(true);
+    focusSection("details", { focusTarget: false });
+  }
+
+  function closeScheduleEditor() {
+    setScheduleEditorOpen(false);
+    setEditingScheduleId(undefined);
+    setScheduleDraft(createScheduleDraftState());
+  }
+
+  function updateScheduleDraft<Field extends keyof ScheduleDraftState>(
+    field: Field,
+    value: ScheduleDraftState[Field]
+  ) {
+    setScheduleDraft((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function handleScheduleSubmit() {
+    if (!selectedAgentId) {
+      return;
+    }
+
+    setScheduleSubmitting(true);
+    setScheduleError(undefined);
+
+    const payload = buildScheduledTaskPayload(selectedAgentId, scheduleDraft);
+
+    try {
+      if (editingScheduleId) {
+        await updateScheduledTaskRequest(
+          selectedAgentId,
+          editingScheduleId,
+          payload as ScheduledTaskUpdate
+        );
+      } else {
+        await createScheduledTaskRequest(
+          selectedAgentId,
+          payload as ScheduledTaskCreate
+        );
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["scheduled-tasks"],
+      });
+      closeScheduleEditor();
+    } catch (error) {
+      setScheduleError(
+        error instanceof Error ? error.message : "Schedule update failed."
+      );
+    } finally {
+      setScheduleSubmitting(false);
+    }
+  }
+
+  async function handleScheduledTaskRun(task: ScheduledTask) {
+    if (!selectedAgentId) {
+      return;
+    }
+    setScheduleError(undefined);
+    try {
+      await runScheduledTaskRequest(selectedAgentId, task.id);
+      await queryClient.invalidateQueries({
+        queryKey: ["scheduled-tasks"],
+      });
+    } catch (error) {
+      setScheduleError(
+        error instanceof Error ? error.message : "Scheduled run failed."
+      );
+    }
+  }
+
+  async function handleScheduledTaskToggle(task: ScheduledTask) {
+    if (!selectedAgentId) {
+      return;
+    }
+    setScheduleError(undefined);
+    try {
+      await updateScheduledTaskRequest(selectedAgentId, task.id, {
+        enabled: !task.enabled,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["scheduled-tasks"],
+      });
+    } catch (error) {
+      setScheduleError(
+        error instanceof Error ? error.message : "Schedule update failed."
+      );
+    }
+  }
+
+  async function handleScheduledTaskDelete(task: ScheduledTask) {
+    if (!selectedAgentId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete the scheduled task "${task.title}"?`
+    );
+    if (!confirmed) {
+      return;
+    }
+    setScheduleError(undefined);
+    try {
+      await deleteScheduledTaskRequest(selectedAgentId, task.id);
+      await queryClient.invalidateQueries({
+        queryKey: ["scheduled-tasks"],
+      });
+      if (editingScheduleId === task.id) {
+        closeScheduleEditor();
+      }
+    } catch (error) {
+      setScheduleError(
+        error instanceof Error ? error.message : "Schedule deletion failed."
+      );
+    }
+  }
+
   function getDesktopDetailWidth() {
     return window.innerWidth <= 1280 ? 280 : 320;
   }
@@ -827,7 +1232,7 @@ export default function App() {
     widths = desktopPanelWidthsRef.current
   ) {
     const limits = PANEL_WIDTH_LIMITS[panel];
-    let maxWidth = limits.max;
+    let maxWidth: number = limits.max;
     const shellWidth = appShellRef.current?.clientWidth;
     if (shellWidth) {
       const otherPanelWidth =
@@ -1076,6 +1481,15 @@ export default function App() {
     if (!selectedAgentId || !draft.trim() || threadDeleted) {
       return;
     }
+    forceAutoScrollTimelineRef.current = true;
+    if (
+      typeof window !== "undefined" &&
+      window.innerWidth < DESKTOP_BREAKPOINT &&
+      document.activeElement instanceof HTMLElement &&
+      isEditableElement(document.activeElement)
+    ) {
+      document.activeElement.blur();
+    }
     const controller = new AbortController();
     abortRef.current = controller;
     setStreamConsoleEntries([]);
@@ -1218,6 +1632,8 @@ export default function App() {
     if (!selectedAgentId) {
       return;
     }
+    forceAutoScrollTimelineRef.current = true;
+    timelineMetricsRef.current = undefined;
     abortRef.current?.abort();
     abortRef.current = null;
     setSelectedSessionId(selectedAgentId, null);
@@ -1228,7 +1644,7 @@ export default function App() {
   }
 
   function handleModeChange(nextMode: "fast" | "think") {
-    setRuntimeConfig((current) => ({
+    updateRuntimeConfigState((current) => ({
       ...current,
       presetId: current.presetId ?? GEMMA_BALANCED_PRESET_ID,
       lmStudioEnableThinking: nextMode === "think",
@@ -1696,6 +2112,7 @@ export default function App() {
           aria-live="polite"
           className="timeline"
           data-mobile-scroll-region="true"
+          onPointerDownCapture={handleTimelinePointerDownCapture}
           ref={timelineRef}
           role="log"
         >
@@ -1874,6 +2291,285 @@ export default function App() {
               </div>
             </section>
             <section className="detail-section">
+              <h3>Scheduled tasks</h3>
+              <p>
+                Run saved prompts every hour, every day, or every week. The API
+                keeps the cadence steady, and the app checks in gently while
+                backgrounded to avoid wasting battery.
+              </p>
+              <div className="chip-row">
+                <span className="chip">
+                  {selectedAgentSchedules.length} schedule
+                  {selectedAgentSchedules.length === 1 ? "" : "s"}
+                </span>
+                <span className="chip">{isOnline ? "Online" : "Offline"}</span>
+                <span className="chip">
+                  Polling{" "}
+                  {getSchedulePollingInterval({
+                    documentHidden: isDocumentHidden,
+                    isOnline,
+                    notificationsEnabled,
+                  }) === false
+                    ? "paused"
+                    : isDocumentHidden
+                      ? "5 min"
+                      : "1 min"}
+                </span>
+              </div>
+              <div className="detail-actions">
+                <button
+                  className="secondary-button"
+                  disabled={!selectedAgentId}
+                  onClick={() => openScheduleEditor()}
+                  type="button"
+                >
+                  New schedule
+                </button>
+              </div>
+              {scheduleError ? (
+                <p className="error-text detail-hint">{scheduleError}</p>
+              ) : null}
+              {scheduleEditorOpen ? (
+                <div className="schedule-editor">
+                  <label className="control-stack">
+                    <span className="control-label">Title</span>
+                    <input
+                      className="text-input"
+                      onChange={(event) =>
+                        updateScheduleDraft("title", event.target.value)
+                      }
+                      placeholder="Daily summary"
+                      value={scheduleDraft.title}
+                    />
+                  </label>
+                  <label className="control-stack">
+                    <span className="control-label">Prompt</span>
+                    <textarea
+                      className="composer-input schedule-editor-input"
+                      onChange={(event) =>
+                        updateScheduleDraft("prompt", event.target.value)
+                      }
+                      placeholder="Summarize the latest activity."
+                      value={scheduleDraft.prompt}
+                    />
+                  </label>
+                  <div className="detail-controls">
+                    <label className="control-stack">
+                      <span className="control-label">Recurrence</span>
+                      <select
+                        className="select"
+                        onChange={(event) =>
+                          updateScheduleDraft(
+                            "recurrence",
+                            event.target
+                              .value as ScheduleDraftState["recurrence"]
+                          )
+                        }
+                        value={scheduleDraft.recurrence}
+                      >
+                        <option value="hourly">Hourly</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                      </select>
+                    </label>
+                    <label className="control-stack">
+                      <span className="control-label">Minute</span>
+                      <input
+                        className="text-input"
+                        inputMode="numeric"
+                        max="59"
+                        min="0"
+                        onChange={(event) =>
+                          updateScheduleDraft(
+                            "minuteOfHour",
+                            event.target.value
+                          )
+                        }
+                        type="number"
+                        value={scheduleDraft.minuteOfHour}
+                      />
+                    </label>
+                    {scheduleDraft.recurrence !== "hourly" ? (
+                      <label className="control-stack">
+                        <span className="control-label">Hour</span>
+                        <input
+                          className="text-input"
+                          inputMode="numeric"
+                          max="23"
+                          min="0"
+                          onChange={(event) =>
+                            updateScheduleDraft("hourOfDay", event.target.value)
+                          }
+                          type="number"
+                          value={scheduleDraft.hourOfDay}
+                        />
+                      </label>
+                    ) : null}
+                    {scheduleDraft.recurrence === "weekly" ? (
+                      <label className="control-stack">
+                        <span className="control-label">Day</span>
+                        <select
+                          className="select"
+                          onChange={(event) =>
+                            updateScheduleDraft("dayOfWeek", event.target.value)
+                          }
+                          value={scheduleDraft.dayOfWeek}
+                        >
+                          {WEEKDAY_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                  </div>
+                  <div className="detail-controls">
+                    <label className="control-stack">
+                      <span className="control-label">Session history</span>
+                      <select
+                        className="select"
+                        onChange={(event) =>
+                          updateScheduleDraft(
+                            "sessionMode",
+                            event.target
+                              .value as ScheduleDraftState["sessionMode"]
+                          )
+                        }
+                        value={scheduleDraft.sessionMode}
+                      >
+                        <option value="dedicated">Reuse one thread</option>
+                        <option value="fresh">
+                          Create a new thread each run
+                        </option>
+                      </select>
+                    </label>
+                    <label className="control-stack">
+                      <span className="control-label">Time zone</span>
+                      <input
+                        className="text-input"
+                        onChange={(event) =>
+                          updateScheduleDraft("timezone", event.target.value)
+                        }
+                        value={scheduleDraft.timezone}
+                      />
+                    </label>
+                  </div>
+                  <div className="detail-controls schedule-toggle-grid">
+                    <label className="checkbox-row">
+                      <input
+                        checked={scheduleDraft.enabled}
+                        onChange={(event) =>
+                          updateScheduleDraft("enabled", event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>Enabled</span>
+                    </label>
+                    <label className="checkbox-row">
+                      <input
+                        checked={scheduleDraft.notifyOnCompletion}
+                        onChange={(event) =>
+                          updateScheduleDraft(
+                            "notifyOnCompletion",
+                            event.target.checked
+                          )
+                        }
+                        type="checkbox"
+                      />
+                      <span>Notify on completion</span>
+                    </label>
+                  </div>
+                  <div className="detail-actions">
+                    <button
+                      className="primary-button"
+                      disabled={scheduleSubmitting || !selectedAgentId}
+                      onClick={() => void handleScheduleSubmit()}
+                      type="button"
+                    >
+                      {editingScheduleId ? "Save schedule" : "Create schedule"}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={closeScheduleEditor}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <div className="schedule-list">
+                {selectedAgentSchedules.map((task) => (
+                  <article className="schedule-card" key={task.id}>
+                    <div className="schedule-card-top">
+                      <strong>{task.title}</strong>
+                      <span
+                        className={`chip ${task.enabled ? "" : "chip-danger"}`}
+                      >
+                        {task.enabled ? "Enabled" : "Paused"}
+                      </span>
+                    </div>
+                    <p>{describeScheduledTask(task)}</p>
+                    <div className="chip-row">
+                      <span className="chip">{task.timezone}</span>
+                      <span className="chip">
+                        Next {formatTime(task.nextRunAt)}
+                      </span>
+                      <span className="chip">
+                        Last {task.lastRunStatus ?? "idle"}
+                      </span>
+                    </div>
+                    {task.lastRunError ? (
+                      <p className="error-text detail-hint">
+                        {task.lastRunError}
+                      </p>
+                    ) : task.lastAssistantSummary ? (
+                      <p className="support-text detail-hint">
+                        {task.lastAssistantSummary}
+                      </p>
+                    ) : null}
+                    <div className="detail-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => void handleScheduledTaskRun(task)}
+                        type="button"
+                      >
+                        Run now
+                      </button>
+                      <button
+                        className="ghost-button"
+                        onClick={() => openScheduleEditor(task)}
+                        type="button"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="ghost-button"
+                        onClick={() => void handleScheduledTaskToggle(task)}
+                        type="button"
+                      >
+                        {task.enabled ? "Pause" : "Resume"}
+                      </button>
+                      <button
+                        className="ghost-button danger-button"
+                        onClick={() => void handleScheduledTaskDelete(task)}
+                        type="button"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+                {selectedAgentSchedules.length === 0 ? (
+                  <p className="support-text detail-hint">
+                    No schedules yet. Create one to automate recurring prompts
+                    for this agent.
+                  </p>
+                ) : null}
+              </div>
+            </section>
+            <section className="detail-section">
               <h3>Notifications</h3>
               <p>
                 Get a browser notification when a reply finishes while the app
@@ -1917,7 +2613,7 @@ export default function App() {
                     aria-label="Chat model"
                     className="select"
                     onChange={(event) =>
-                      setRuntimeConfig((current) => ({
+                      updateRuntimeConfigState((current) => ({
                         ...current,
                         model: event.target.value,
                       }))
@@ -1937,7 +2633,7 @@ export default function App() {
                     aria-label="Gemma preset"
                     className="select"
                     onChange={(event) =>
-                      setRuntimeConfig((current) =>
+                      updateRuntimeConfigState((current) =>
                         applyPresetRuntimeConfig(current, event.target.value)
                       )
                     }
@@ -2324,6 +3020,45 @@ function findLatestPendingSkillActivityIndex(
   }
 
   return -1;
+}
+
+function createScheduleDraftState(task?: ScheduledTask): ScheduleDraftState {
+  const timezone =
+    task?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+  return {
+    title: task?.title ?? "",
+    prompt: task?.prompt ?? "",
+    recurrence: task?.recurrence ?? "daily",
+    minuteOfHour: String(task?.minuteOfHour ?? 0),
+    hourOfDay: String(task?.hourOfDay ?? 9),
+    dayOfWeek: String(task?.dayOfWeek ?? 1),
+    sessionMode: task?.sessionMode ?? "dedicated",
+    notifyOnCompletion: task?.notifyOnCompletion ?? true,
+    enabled: task?.enabled ?? true,
+    timezone,
+  };
+}
+
+function buildScheduledTaskPayload(
+  agentId: string,
+  draft: ScheduleDraftState
+): ScheduledTaskCreate {
+  const minuteOfHour = Number(draft.minuteOfHour);
+  const hourOfDay = Number(draft.hourOfDay);
+  const dayOfWeek = Number(draft.dayOfWeek);
+  return {
+    agentId,
+    title: draft.title.trim(),
+    prompt: draft.prompt.trim(),
+    recurrence: draft.recurrence,
+    minuteOfHour,
+    ...(draft.recurrence !== "hourly" ? { hourOfDay } : {}),
+    ...(draft.recurrence === "weekly" ? { dayOfWeek } : {}),
+    timezone: draft.timezone.trim() || "UTC",
+    enabled: draft.enabled,
+    notifyOnCompletion: draft.notifyOnCompletion,
+    sessionMode: draft.sessionMode,
+  };
 }
 
 function IconButton(props: {

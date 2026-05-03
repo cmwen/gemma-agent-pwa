@@ -11,6 +11,7 @@ Local-first chat PWA for `min-kb-store` agents, optimized for LM Studio with Gem
 - Gemma presets for **Fast**, **Balanced**, and **Deep**
 - Separate persistence for visible assistant output and captured thinking metadata
 - Optional browser notifications for completed background replies
+- Recurring scheduled tasks with hourly, daily, and weekly cadences
 
 ## Workspace layout
 
@@ -73,6 +74,28 @@ pnpm build
 pnpm lint
 ```
 
+## Scheduled tasks
+
+- Create recurring prompts from the **Details** panel for the selected agent.
+- Supported cadences: **hourly**, **daily**, and **weekly**.
+- Schedules run on the API side, so they keep their cadence even if the PWA
+  tab reconnects later.
+- Each schedule can either reuse a dedicated thread or create a fresh chat on
+  every run.
+- Manual **Run now**, pause/resume, edit, delete, recent outcome, and next-run
+  state are all available in-app.
+
+### Mobile and PWA behavior
+
+- Schedule status sync uses a battery-aware cadence: about every minute while
+  the app is active, every five minutes while backgrounded with notifications
+  enabled, and it pauses when offline.
+- Completion alerts reuse the existing browser/service-worker notification path,
+  so installed PWAs on mobile can still surface finished runs without an
+  aggressive reconnect loop.
+- Mobile browsers can still suspend background work entirely, so notifications
+  and status refresh are **best effort** while the app is fully closed.
+
 ## Behavior contracts
 
 - Runtime config resolution flows from app defaults to agent defaults to session
@@ -86,6 +109,9 @@ pnpm lint
 - Chat streaming uses newline-delimited JSON events that match the shared
   `ChatStreamEvent` contract, and the web client validates each parsed event
   before applying it.
+- Scheduled task cadence is stored with the agent, next-run timestamps are
+  computed from the task timezone, and missed runs are resumed with a single
+  catch-up execution instead of replaying every missed interval.
 
 ## Usability
 

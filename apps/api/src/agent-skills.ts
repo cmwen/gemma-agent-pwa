@@ -608,7 +608,11 @@ function extractSingleValuePositionalArg(
     return undefined;
   }
 
-  const [, candidate] = entries[0];
+  const entry = entries[0];
+  if (!entry) {
+    return undefined;
+  }
+  const [, candidate] = entry;
   if (typeof candidate === "string") {
     return candidate;
   }

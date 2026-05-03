@@ -8,6 +8,8 @@ import {
   GEMMA_DEEP_PRESET_ID,
   mergeRuntimeConfig,
   normalizeRuntimeConfig,
+  scheduledTaskCreateSchema,
+  scheduledTaskSchema,
 } from "./index";
 
 describe("runtime config helpers", () => {
@@ -71,5 +73,99 @@ describe("runtime config helpers", () => {
       topP: 0.72,
       disabledSkills: [],
     });
+  });
+});
+
+describe("scheduled task schemas", () => {
+  it("accepts hourly, daily, and weekly schedules with matching fields", () => {
+    expect(
+      scheduledTaskCreateSchema.parse({
+        agentId: "release-planner",
+        title: "Hourly digest",
+        prompt: "Summarize the latest activity.",
+        recurrence: "hourly",
+        minuteOfHour: 15,
+        timezone: "Australia/Sydney",
+        enabled: true,
+        notifyOnCompletion: true,
+        sessionMode: "dedicated",
+      })
+    ).toMatchObject({
+      recurrence: "hourly",
+      minuteOfHour: 15,
+    });
+
+    expect(
+      scheduledTaskCreateSchema.parse({
+        agentId: "release-planner",
+        title: "Daily digest",
+        prompt: "Summarize the latest activity.",
+        recurrence: "daily",
+        minuteOfHour: 30,
+        hourOfDay: 9,
+        timezone: "Australia/Sydney",
+        enabled: true,
+        notifyOnCompletion: true,
+        sessionMode: "fresh",
+      })
+    ).toMatchObject({
+      recurrence: "daily",
+      hourOfDay: 9,
+    });
+
+    expect(
+      scheduledTaskSchema.parse({
+        id: "task-1",
+        agentId: "release-planner",
+        title: "Weekly digest",
+        prompt: "Summarize the latest activity.",
+        recurrence: "weekly",
+        minuteOfHour: 45,
+        hourOfDay: 8,
+        dayOfWeek: 1,
+        timezone: "Australia/Sydney",
+        enabled: true,
+        notifyOnCompletion: true,
+        sessionMode: "dedicated",
+        createdAt: "2026-05-01T00:00:00.000Z",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+        nextRunAt: "2026-05-05T22:45:00.000Z",
+        recentRuns: [],
+      })
+    ).toMatchObject({
+      recurrence: "weekly",
+      dayOfWeek: 1,
+    });
+  });
+
+  it("rejects recurrence combinations that omit required fields", () => {
+    expect(() =>
+      scheduledTaskCreateSchema.parse({
+        agentId: "release-planner",
+        title: "Broken daily task",
+        prompt: "Summarize the latest activity.",
+        recurrence: "daily",
+        minuteOfHour: 15,
+        timezone: "Australia/Sydney",
+        enabled: true,
+        notifyOnCompletion: true,
+        sessionMode: "dedicated",
+      })
+    ).toThrow(/hour of day/i);
+
+    expect(() =>
+      scheduledTaskCreateSchema.parse({
+        agentId: "release-planner",
+        title: "Broken weekly task",
+        prompt: "Summarize the latest activity.",
+        recurrence: "weekly",
+        minuteOfHour: 15,
+        hourOfDay: 9,
+        timezone: "Australia/Sydney",
+        enabled: true,
+        notifyOnCompletion: true,
+        sessionMode: "dedicated",
+      })
+    ).toThrow(/day of week/i);
   });
 });

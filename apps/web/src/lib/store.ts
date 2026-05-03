@@ -5,12 +5,14 @@ import { getPreferredTheme, type ThemeMode } from "../app-utils";
 interface AppStore {
   selectedAgentId?: string;
   selectedSessionIds: Record<string, string | null>;
+  lastScheduledRunNotifications: Record<string, string>;
   drafts: Record<string, string>;
   themeMode: ThemeMode;
   modelDetailsOpen: boolean;
   notificationsEnabled: boolean;
   setSelectedAgentId: (agentId?: string) => void;
   setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
+  setLastScheduledRunNotification: (scheduleId: string, runId: string) => void;
   setDraft: (key: string, value: string) => void;
   setThemeMode: (themeMode: ThemeMode) => void;
   setModelDetailsOpen: (modelDetailsOpen: boolean) => void;
@@ -22,6 +24,7 @@ export const useAppStore = create<AppStore>()(
     (set) => ({
       selectedAgentId: undefined,
       selectedSessionIds: {},
+      lastScheduledRunNotifications: {},
       drafts: {},
       themeMode: getPreferredTheme(),
       modelDetailsOpen: false,
@@ -32,6 +35,13 @@ export const useAppStore = create<AppStore>()(
           selectedSessionIds: {
             ...state.selectedSessionIds,
             [agentId]: sessionId ?? null,
+          },
+        })),
+      setLastScheduledRunNotification: (scheduleId, runId) =>
+        set((state) => ({
+          lastScheduledRunNotifications: {
+            ...state.lastScheduledRunNotifications,
+            [scheduleId]: runId,
           },
         })),
       setDraft: (key, value) =>

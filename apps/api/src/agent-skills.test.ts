@@ -241,7 +241,6 @@ describe("structured skill input helpers", () => {
     expect(
       shouldRetryWithSinglePositionalArg(
         {
-          stdout: "",
           stderr: "error: unrecognized arguments: --query\n",
           exitCode: 2,
           timedOut: false,
@@ -256,7 +255,6 @@ describe("structured skill input helpers", () => {
     expect(
       shouldRetryWithSinglePositionalArg(
         {
-          stdout: "",
           stderr: "Error: missing graph root",
           exitCode: 1,
           timedOut: false,

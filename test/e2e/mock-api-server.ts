@@ -314,6 +314,74 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (/long mobile scroll/i.test(prompt)) {
+      const assistantParagraphs = Array.from(
+        { length: 18 },
+        (_, index) =>
+          `Paragraph ${index + 1}: This is intentionally long mobile-friendly release guidance so the conversation timeline grows tall enough to verify touch scrolling while the assistant is still streaming.`
+      );
+      const assistantMarkdown = [
+        `Streaming reply for ${model}`,
+        "",
+        ...assistantParagraphs,
+      ].join("\n\n");
+
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      });
+
+      let streamedMarkdown = `Streaming reply for ${model}`;
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        delta: streamedMarkdown,
+        messageId: "assistant-1",
+      });
+
+      for (const paragraph of assistantParagraphs) {
+        await delay(120);
+        const delta = `\n\n${paragraph}`;
+        streamedMarkdown += delta;
+        writeEvent(response, encoder, {
+          type: EventType.TEXT_MESSAGE_CONTENT,
+          delta,
+          messageId: "assistant-1",
+        });
+      }
+
+      const assistantTurn = {
+        messageId: "turn-assistant-1",
+        sender: "assistant" as const,
+        createdAt: new Date().toISOString(),
+        bodyMarkdown: assistantMarkdown,
+        relativePath: `agents/${agent.id}/history/${sessionId}/turn-assistant-1.md`,
+      };
+
+      completedSession = {
+        ...thread,
+        lastTurnAt: assistantTurn.createdAt,
+        summary: `Streaming reply for ${model}`,
+        turnCount: 2,
+        turns: [userTurn, assistantTurn],
+      };
+
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "assistant-1",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.RUN_FINISHED,
+        outcome: {
+          type: "success",
+        },
+        runId: input.runId,
+        threadId: input.threadId,
+      });
+      response.end();
+      return;
+    }
+
     if (thinkingEnabled) {
       writeEvent(response, encoder, {
         type: EventType.REASONING_START,
