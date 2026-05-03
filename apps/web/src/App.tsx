@@ -1817,40 +1817,42 @@ export default function App() {
         </div>
       </div>
 
-      <div className="mobile-utility-bar">
-        <IconButton label="Open command palette" onClick={openCommandPalette}>
-          <CommandIcon />
-        </IconButton>
-        <IconButton label="Open shortcuts and help" onClick={openHelpDialog}>
-          <HelpIcon />
-        </IconButton>
-        <IconButton
-          label={`Switch to ${themeMode === "dark" ? "light" : "dark"} theme`}
-          onClick={handleThemeToggle}
-        >
-          {themeMode === "dark" ? <SunIcon /> : <MoonIcon />}
-        </IconButton>
-      </div>
-
-      <nav
-        aria-label="Primary navigation"
-        className="mobile-nav"
-        onKeyDown={(event) => handleArrowKeyNavigation(event, "horizontal")}
-      >
-        {MOBILE_SECTIONS.map((section) => (
-          <button
-            aria-controls={`app-section-${section.id}`}
-            aria-pressed={mobileSection === section.id}
-            className={mobileSection === section.id ? "is-active" : ""}
-            data-roving-focus="true"
-            key={section.id}
-            onClick={() => focusSection(section.id, { focusTarget: false })}
-            type="button"
+      <div className="mobile-top-chrome">
+        <div className="mobile-utility-bar">
+          <IconButton label="Open command palette" onClick={openCommandPalette}>
+            <CommandIcon />
+          </IconButton>
+          <IconButton label="Open shortcuts and help" onClick={openHelpDialog}>
+            <HelpIcon />
+          </IconButton>
+          <IconButton
+            label={`Switch to ${themeMode === "dark" ? "light" : "dark"} theme`}
+            onClick={handleThemeToggle}
           >
-            {section.label}
-          </button>
-        ))}
-      </nav>
+            {themeMode === "dark" ? <SunIcon /> : <MoonIcon />}
+          </IconButton>
+        </div>
+
+        <nav
+          aria-label="Primary navigation"
+          className="mobile-nav"
+          onKeyDown={(event) => handleArrowKeyNavigation(event, "horizontal")}
+        >
+          {MOBILE_SECTIONS.map((section) => (
+            <button
+              aria-controls={`app-section-${section.id}`}
+              aria-pressed={mobileSection === section.id}
+              className={mobileSection === section.id ? "is-active" : ""}
+              data-roving-focus="true"
+              key={section.id}
+              onClick={() => focusSection(section.id, { focusTarget: false })}
+              type="button"
+            >
+              {section.label}
+            </button>
+          ))}
+        </nav>
+      </div>
 
       <aside
         className={buildPanelClassName("panel rail", "agents", mobileSection)}

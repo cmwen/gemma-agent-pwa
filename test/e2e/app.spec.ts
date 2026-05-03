@@ -2,6 +2,20 @@ import { expect, test } from "@playwright/test";
 
 const mockApiBaseUrl = "http://127.0.0.1:56012";
 
+function getTranslateX(transform: string) {
+  if (transform === "none") {
+    return 0;
+  }
+
+  const values = transform.match(/matrix(3d)?\((.+)\)/);
+  if (!values) {
+    return 0;
+  }
+
+  const entries = values[2].split(",").map((value) => Number(value.trim()));
+  return Number(values[1] ? entries[12] : (entries[4] ?? 0));
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async ({ page, request }) => {
@@ -62,6 +76,53 @@ test("streams quick replies cleanly on mobile without horizontal overflow", asyn
     .locator(".message-body pre")
     .evaluate((element) => element.scrollWidth - element.clientWidth);
   expect(codeOverflowWidth).toBeLessThanOrEqual(1);
+});
+
+test("animates the segmented toggle highlight with CSS when the pressed option changes", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const toggle = page.locator(".chat-header .mode-toggle");
+  const fastButton = page.getByRole("button", { name: "Fast" });
+  const thinkButton = page.getByRole("button", { name: "Think" });
+  await expect(toggle).toBeVisible();
+  const startsOnFast =
+    (await fastButton.getAttribute("aria-pressed")) === "true";
+  const targetButton = startsOnFast ? thinkButton : fastButton;
+  const returnButton = startsOnFast ? fastButton : thinkButton;
+
+  const initialTransform = await toggle.evaluate(
+    (element) => getComputedStyle(element, "::before").transform
+  );
+  const initialTranslateX = getTranslateX(initialTransform);
+
+  await targetButton.click();
+
+  await expect(targetButton).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => {
+      const translateX = getTranslateX(
+        await toggle.evaluate(
+          (element) => getComputedStyle(element, "::before").transform
+        )
+      );
+      return Math.abs(translateX - initialTranslateX) > 20;
+    })
+    .toBe(true);
+
+  await returnButton.click();
+  await expect(returnButton).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => {
+      const translateX = getTranslateX(
+        await toggle.evaluate(
+          (element) => getComputedStyle(element, "::before").transform
+        )
+      );
+      return Math.abs(translateX - initialTranslateX) <= 1;
+    })
+    .toBe(true);
 });
 
 test("keeps the mobile timeline scroll position when reading a long streamed reply", async ({
@@ -125,6 +186,72 @@ test("keeps the mobile timeline scroll position when reading a long streamed rep
   );
   expect(finalScrollTop).toBeLessThanOrEqual(8);
   expect(maxScrollTop).toBeGreaterThan(400);
+});
+
+test("collapses the mobile chat header on scroll and restores it near the top", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.fill(
+    [
+      "Long mobile scroll request",
+      "",
+      "Please send a long mobile scroll response so I can verify the sticky composer and the collapsing mobile chat chrome.",
+      "",
+      "long mobile scroll",
+    ].join("\n")
+  );
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const timeline = page.locator(".timeline");
+  await expect
+    .poll(() =>
+      timeline.evaluate(
+        (element) => element.scrollHeight - element.clientHeight
+      )
+    )
+    .toBeGreaterThan(400);
+
+  await expect(page.locator(".mobile-top-chrome")).toBeVisible();
+  await expect(page.locator(".chat-header")).toBeVisible();
+  const chatHeader = page.locator(".chat-header");
+  const expandedHeaderHeight = await chatHeader.evaluate((element) =>
+    Math.round(element.getBoundingClientRect().height)
+  );
+
+  await timeline.evaluate((element) => {
+    element.scrollTop = 220;
+  });
+
+  await expect
+    .poll(() =>
+      chatHeader.evaluate((element) =>
+        Math.round(element.getBoundingClientRect().height)
+      )
+    )
+    .toBeLessThanOrEqual(8);
+  await expect(page.locator(".mobile-top-chrome")).toBeVisible();
+
+  const composerInset = await page
+    .locator(".composer")
+    .evaluate((element) =>
+      Math.round(window.innerHeight - element.getBoundingClientRect().bottom)
+    );
+  expect(Math.abs(composerInset)).toBeLessThanOrEqual(24);
+
+  await timeline.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+
+  await expect
+    .poll(() =>
+      chatHeader.evaluate((element) =>
+        Math.round(element.getBoundingClientRect().height)
+      )
+    )
+    .toBeGreaterThanOrEqual(expandedHeaderHeight - 8);
 });
 
 test("keeps reasoning traces readable on mobile after the final assistant response", async ({
@@ -323,6 +450,13 @@ test("hides the details panel when closed and supports soft-deleting chat histor
   await expect(
     page.locator(".message-card.assistant").last().getByText("mobile: wrapped")
   ).toBeVisible();
+  const timeline = page.locator(".timeline");
+  await timeline.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect
+    .poll(() => timeline.evaluate((element) => element.scrollTop))
+    .toBeLessThanOrEqual(8);
   await expect(
     page
       .locator("#app-section-chat")

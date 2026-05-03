@@ -205,6 +205,10 @@ kbd {
   display: none;
 }
 
+.mobile-top-chrome {
+  display: contents;
+}
+
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -416,6 +420,23 @@ kbd {
   }
 }
 
+@keyframes chat-header-scrollaway {
+  from {
+    max-height: 24rem;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-color: transparent;
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+}
+
 .chip-row,
 .hint-list {
   display: flex;
@@ -542,22 +563,73 @@ kbd {
 }
 
 .mode-toggle {
-  display: inline-flex;
-  gap: 0.35rem;
-  padding: 0.25rem;
+  --toggle-gap: 0.35rem;
+  --toggle-padding: 0.25rem;
+  --toggle-duration: 180ms;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  gap: var(--toggle-gap);
+  padding: var(--toggle-padding);
   border: 1px solid var(--surface-border);
   border-radius: 999px;
   background: var(--panel-bg-strong);
+  position: relative;
+  isolation: isolate;
 }
 
 .mode-toggle button {
   padding: 0.55rem 0.85rem;
   border: 0;
   background: transparent;
+  position: relative;
+  z-index: 1;
+  border-radius: 999px;
+  transition:
+    color var(--toggle-duration) ease,
+    background-color var(--toggle-duration) ease;
 }
 
 .mode-toggle .is-active {
   background: var(--accent-soft-strong);
+}
+
+@supports selector(:has(*)) {
+  .mode-toggle::before {
+    content: "";
+    position: absolute;
+    inset-block: var(--toggle-padding);
+    inset-inline-start: var(--toggle-padding);
+    width: calc((100% - (var(--toggle-padding) * 2) - var(--toggle-gap)) / 2);
+    border-radius: 999px;
+    background: var(--accent-soft-strong);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+    transform: translateX(0);
+    transition:
+      transform var(--toggle-duration) cubic-bezier(0.2, 0.9, 0.2, 1),
+      background-color var(--toggle-duration) ease,
+      box-shadow var(--toggle-duration) ease;
+  }
+
+  .mode-toggle:has(> button:nth-of-type(2)[aria-pressed="true"])::before {
+    transform: translateX(calc(100% + var(--toggle-gap)));
+  }
+
+  .mode-toggle button:not([aria-pressed="true"]) {
+    color: var(--text-muted);
+  }
+
+  .mode-toggle .is-active {
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-toggle::before,
+  .mode-toggle button {
+    transition: none;
+  }
 }
 
 .timeline {
@@ -1274,10 +1346,25 @@ kbd {
     min-height: 100dvh;
     height: 100dvh;
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 0.85rem;
     padding: 0.85rem;
     overflow: hidden;
+  }
+
+  .mobile-top-chrome {
+    display: grid;
+    gap: 0.85rem;
+    min-height: 0;
+    max-height: 8rem;
+    overflow: hidden;
+    opacity: 1;
+    transform: translateY(0);
+    transform-origin: top;
+    transition:
+      max-height 180ms ease,
+      opacity 180ms ease,
+      transform 180ms ease;
   }
 
   .app-toolbar {
@@ -1304,7 +1391,32 @@ kbd {
   }
 
   .chat-header {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
     padding: 1rem;
+    max-height: 24rem;
+    overflow: hidden;
+    background: var(--panel-bg-strong);
+  }
+
+  @supports (animation-timeline: scroll()) {
+    .chat-panel {
+      timeline-scope: --chat-header-scroll;
+    }
+
+    .chat-panel .timeline {
+      scroll-timeline-name: --chat-header-scroll;
+      scroll-timeline-axis: block;
+    }
+
+    .chat-header {
+      animation: chat-header-scrollaway linear both;
+      animation-timeline: --chat-header-scroll;
+      animation-range: 0 6rem;
+      transform-origin: top;
+      will-change: max-height, padding, border-color, opacity, transform;
+    }
   }
 
   .command-trigger {
@@ -1320,8 +1432,6 @@ kbd {
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.5rem;
     flex-shrink: 0;
-    position: sticky;
-    top: 0;
     z-index: 2;
     padding: 0.2rem;
     border: 1px solid var(--surface-border);
@@ -1429,7 +1539,10 @@ kbd {
 
   .composer {
     gap: 0.7rem;
-    position: static;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin-top: auto;
     background: var(--panel-bg);
     padding: 0.8rem 1rem calc(0.75rem + env(safe-area-inset-bottom, 0px));
     backdrop-filter: blur(12px);
