@@ -13,6 +13,7 @@ beforeEach(() => {
     drafts: {},
     themeMode: "dark",
     modelDetailsOpen: false,
+    notificationsEnabled: false,
   });
 });
 
@@ -45,5 +46,17 @@ describe("model detail visibility", () => {
     useAppStore.getState().setModelDetailsOpen(true);
 
     expect(useAppStore.getState().modelDetailsOpen).toBe(true);
+  });
+});
+
+describe("notification preference", () => {
+  it("starts disabled until the user opts in", () => {
+    expect(useAppStore.getState().notificationsEnabled).toBe(false);
+  });
+
+  it("persists the notification toggle state", () => {
+    useAppStore.getState().setNotificationsEnabled(true);
+
+    expect(useAppStore.getState().notificationsEnabled).toBe(true);
   });
 });

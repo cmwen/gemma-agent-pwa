@@ -10,6 +10,7 @@ Local-first chat PWA for `min-kb-store` agents, optimized for LM Studio with Gem
 - LM Studio OpenAI-compatible streaming chat integration
 - Gemma presets for **Fast**, **Balanced**, and **Deep**
 - Separate persistence for visible assistant output and captured thinking metadata
+- Optional browser notifications for completed background replies
 
 ## Workspace layout
 
@@ -89,6 +90,7 @@ pnpm lint
 ## Usability
 
 - The web UI now supports **light and dark themes** with a persistent theme toggle.
+- Optional reply notifications can be enabled from **Details** so completed background runs can alert you.
 - Keyboard navigation is built into the section jump controls, toggle groups, agent/session lists, and composer.
 - Shortcuts: press `/` to focus the composer, `Ctrl`/`Cmd` + `Enter` to send, and `Alt` + `1` through `4` to jump between **Agents**, **History**, **Chat**, and **Details**.
 - The mobile layout keeps section navigation visible and the composer pinned near the bottom of the active panel for easier one-handed use.

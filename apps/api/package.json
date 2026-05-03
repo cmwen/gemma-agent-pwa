@@ -10,6 +10,8 @@
     "start": "tsx dist/index.js"
   },
   "dependencies": {
+    "@ag-ui/core": "^0.0.53",
+    "@ag-ui/encoder": "^0.0.53",
     "@gemma-agent-pwa/contracts": "workspace:*",
     "@gemma-agent-pwa/min-kb-bridge": "workspace:*",
     "@hono/node-server": "latest",

@@ -1,11 +1,12 @@
+import { EventSchemas, type Message, RunAgentInputSchema } from "@ag-ui/core";
+import { EventEncoder } from "@ag-ui/encoder";
 import {
-  type ChatRequest,
-  chatRequestSchema,
-  chatStreamEventSchema,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
   mergeRuntimeConfig,
+  type PartialChatRuntimeConfig,
+  partialChatRuntimeConfigSchema,
   sessionDeleteModeSchema,
   sessionListStateSchema,
 } from "@gemma-agent-pwa/contracts";
@@ -30,10 +31,10 @@ import {
   getDetectedWebOriginsForPorts,
   splitCsv,
 } from "../../../scripts/network.js";
+import { createAgUiEventMapper } from "./ag-ui-mapper.js";
 import { loadAgentSkills } from "./agent-skills.js";
 import {
   buildChatRequestDebugLog,
-  buildChatStreamDebugLog,
   buildSkillInventoryDebugLog,
   logChatDebugMessage,
 } from "./chat-debug.js";
@@ -48,7 +49,6 @@ const workspace = await resolveWorkspace();
 const app = new Hono();
 const port = Number(process.env.GEMMA_AGENT_PWA_PORT ?? 8787);
 const allowedCorsOrigins = getAllowedCorsOrigins();
-
 app.use(
   "/api/*",
   cors({
@@ -154,16 +154,15 @@ app.post(
 
 app.post("/api/agents/:agentId/chat", async (context) => {
   const agentId = context.req.param("agentId");
-  const request = chatRequestSchema.parse(
-    ((await context.req.json()) ?? {}) satisfies ChatRequest
-  );
+  const input = RunAgentInputSchema.parse((await context.req.json()) ?? {});
+  const forwardedProps = parseForwardedProps(input.forwardedProps);
   const agent = await getAgentById(workspace, agentId);
   if (!agent) {
     return context.json({ error: "Agent not found." }, 404);
   }
 
-  const existingThread = request.sessionId
-    ? await getSession(workspace, agentId, request.sessionId).catch(
+  const existingThread = input.threadId
+    ? await getSession(workspace, agentId, input.threadId).catch(
         () => undefined
       )
     : undefined;
@@ -174,11 +173,11 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     { model: defaultModel },
     agent.runtimeConfig,
     writableThread?.runtimeConfig,
-    request.config
+    forwardedProps.config
   );
-  const prompt = request.prompt.trim();
+  const prompt = extractLatestUserPrompt(input.messages).trim();
   const title =
-    request.title?.trim() ||
+    forwardedProps.title?.trim() ||
     writableThread?.title ||
     prompt.slice(0, 72) ||
     "New Gemma chat";
@@ -187,7 +186,7 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     sender: "user",
     bodyMarkdown: prompt,
     title,
-    sessionId: writableThread?.sessionId,
+    sessionId: writableThread?.sessionId ?? input.threadId,
     runtimeConfig: mergedConfig,
   });
   const enabledSkills = await loadAgentSkills(
@@ -218,28 +217,28 @@ app.post("/api/agents/:agentId/chat", async (context) => {
     )
   );
 
+  const encoder = new EventEncoder({ accept: context.req.header("accept") });
+  context.header("cache-control", "no-store");
+  context.header("content-type", encoder.getContentType());
+
   return streamText(context, async (stream) => {
     const sendEvent = async (event: unknown) => {
-      const parsedEvent = chatStreamEventSchema.parse(event);
-      logChatDebugMessage(
-        buildChatStreamDebugLog(parsedEvent, {
-          agentId,
-          sessionId: userThread.sessionId,
-        })
-      );
-      await stream.writeln(JSON.stringify(parsedEvent));
+      const parsedEvent = EventSchemas.parse(event);
+      await stream.write(encoder.encode(parsedEvent));
     };
     let pendingWrite = Promise.resolve();
     const queueEvent = (event: unknown) => {
       pendingWrite = pendingWrite.then(() => sendEvent(event));
       return pendingWrite;
     };
+    const agUiStream = createAgUiEventMapper({
+      emitEvent: queueEvent,
+      runId: input.runId,
+      threadId: userThread.sessionId,
+    });
 
     try {
-      await queueEvent({
-        type: "thread",
-        thread: userThread,
-      });
+      await agUiStream.start();
 
       const loopResult = await runChatLoop({
         agentId,
@@ -248,13 +247,9 @@ app.post("/api/agents/:agentId/chat", async (context) => {
         conversationTurns: userThread.turns,
         enabledSkills,
         sessionId: userThread.sessionId,
-        emitEvent: queueEvent,
+        emitEvent: (event) => agUiStream.apply(event),
       });
 
-      let threadWithUsage: Awaited<ReturnType<typeof getSession>> | undefined;
-      let assistantTurn:
-        | Awaited<ReturnType<typeof getSession>>["turns"][number]
-        | undefined;
       try {
         const completedThread = await saveChatTurn(workspace, {
           agentId,
@@ -287,44 +282,26 @@ app.post("/api/agents/:agentId/chat", async (context) => {
           completedThread.sessionId,
           llmStatsWithRate
         );
-        threadWithUsage = await getSession(
-          workspace,
-          agentId,
-          completedThread.sessionId
-        );
-        assistantTurn = threadWithUsage.turns.at(-1);
-        if (!assistantTurn) {
+        if (!completedThread.turns.at(-1)) {
           throw new Error("Assistant turn was not persisted.");
         }
       } catch (error) {
         if (isSessionPersistenceCancelledError(error)) {
           await pendingWrite;
-          await queueEvent({
-            type: "error",
-            error: "Session was deleted before the response could be saved.",
-          });
+          await agUiStream.fail(
+            "Session was deleted before the response could be saved."
+          );
           return;
         }
         throw error;
       }
-      if (!threadWithUsage || !assistantTurn) {
-        throw new Error("Assistant turn was not persisted.");
-      }
+      await agUiStream.finish();
       await pendingWrite;
-      await queueEvent({
-        type: "complete",
-        response: {
-          thread: threadWithUsage,
-          assistantTurn,
-        },
-      });
     } catch (error) {
+      await agUiStream.fail(
+        error instanceof Error ? error.message : "Unknown LM Studio error."
+      );
       await pendingWrite;
-      await queueEvent({
-        type: "error",
-        error:
-          error instanceof Error ? error.message : "Unknown LM Studio error.",
-      });
     }
   });
 });
@@ -355,6 +332,43 @@ function summarizeThread(assistantText: string): string {
     .split(/(?<=[.!?])\s+/)
     .find((sentence) => sentence.trim().length > 0);
   return firstSentence?.slice(0, 240) ?? getPresetById().description;
+}
+
+function parseForwardedProps(value: unknown): {
+  config?: PartialChatRuntimeConfig;
+  title?: string;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    ...(record.config
+      ? { config: partialChatRuntimeConfigSchema.parse(record.config) }
+      : {}),
+    ...(typeof record.title === "string" && record.title.trim()
+      ? { title: record.title.trim() }
+      : {}),
+  };
+}
+
+function extractLatestUserPrompt(messages: Message[]): string {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!latestUserMessage) {
+    throw new Error("AG-UI input must include a user message.");
+  }
+
+  if (typeof latestUserMessage.content === "string") {
+    return latestUserMessage.content;
+  }
+
+  return latestUserMessage.content
+    .flatMap((content) => (content.type === "text" ? [content.text] : []))
+    .join("\n")
+    .trim();
 }
 
 function getAllowedCorsOrigins(): Set<string> {

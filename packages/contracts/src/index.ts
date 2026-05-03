@@ -297,11 +297,13 @@ export const chatStreamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("skill_call"),
+    skillCallId: z.string().min(1).optional(),
     skillName: z.string().min(1),
     skillInput: z.string(),
   }),
   z.object({
     type: z.literal("skill_result"),
+    skillCallId: z.string().min(1).optional(),
     skillName: z.string().min(1),
     skillOutput: z.string(),
     exitCode: z.number().int(),

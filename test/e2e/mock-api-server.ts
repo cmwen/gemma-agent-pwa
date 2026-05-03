@@ -3,9 +3,10 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { EventType, RunAgentInputSchema } from "@ag-ui/core";
+import { EventEncoder } from "@ag-ui/encoder";
 import type {
   AgentSummary,
-  ChatRequest,
   ChatSession,
   ChatSessionSummary,
   HealthStatus,
@@ -156,16 +157,37 @@ const server = createServer(async (request, response) => {
   }
 
   if (method === "POST" && url.pathname === `/api/agents/${agent.id}/chat`) {
-    const requestBody = JSON.parse(
-      await readRequestBody(request)
-    ) as ChatRequest;
+    const input = RunAgentInputSchema.parse(
+      JSON.parse(await readRequestBody(request))
+    );
+    const forwardedProps =
+      input.forwardedProps &&
+      typeof input.forwardedProps === "object" &&
+      !Array.isArray(input.forwardedProps)
+        ? (input.forwardedProps as Record<string, unknown>)
+        : {};
     const now = new Date().toISOString();
-    const sessionId = requestBody.sessionId ?? "session-stream";
-    const prompt = requestBody.prompt.trim();
-    const model = requestBody.config?.model ?? models[0]?.id ?? "unknown";
-    const thinkingEnabled =
-      requestBody.config?.lmStudioEnableThinking !== false;
-    const maxTokens = requestBody.config?.maxCompletionTokens ?? 0;
+    const sessionId = input.threadId;
+    const prompt = extractLatestUserPrompt(input.messages).trim();
+    const title =
+      typeof forwardedProps.title === "string" && forwardedProps.title.trim()
+        ? forwardedProps.title.trim()
+        : "Streamed mobile test";
+    const config =
+      forwardedProps.config &&
+      typeof forwardedProps.config === "object" &&
+      !Array.isArray(forwardedProps.config)
+        ? (forwardedProps.config as Record<string, unknown>)
+        : {};
+    const model =
+      typeof config.model === "string"
+        ? config.model
+        : (models[0]?.id ?? "unknown");
+    const thinkingEnabled = config.lmStudioEnableThinking !== false;
+    const maxTokens =
+      typeof config.maxCompletionTokens === "number"
+        ? config.maxCompletionTokens
+        : 0;
     const userTurn = {
       messageId: "turn-user-1",
       sender: "user" as const,
@@ -176,7 +198,7 @@ const server = createServer(async (request, response) => {
     const thread: ChatSession = {
       sessionId,
       agentId: agent.id,
-      title: requestBody.title?.trim() || "Streamed mobile test",
+      title,
       startedAt: now,
       lastTurnAt: now,
       summary: "Streaming mobile test",
@@ -186,45 +208,152 @@ const server = createServer(async (request, response) => {
       runtimeConfig: {
         provider: "lmstudio",
         model,
-        presetId: requestBody.config?.presetId ?? "gemma4-balanced",
+        presetId:
+          typeof config.presetId === "string"
+            ? config.presetId
+            : "gemma4-balanced",
         lmStudioEnableThinking: thinkingEnabled,
         maxCompletionTokens: maxTokens,
-        temperature: requestBody.config?.temperature ?? 0.2,
-        topP: requestBody.config?.topP ?? 0.95,
-        disabledSkills: requestBody.config?.disabledSkills ?? [],
+        temperature:
+          typeof config.temperature === "number" ? config.temperature : 0.2,
+        topP: typeof config.topP === "number" ? config.topP : 0.95,
+        disabledSkills: Array.isArray(config.disabledSkills)
+          ? config.disabledSkills.filter(
+              (value): value is string => typeof value === "string"
+            )
+          : [],
       },
     };
 
+    const encoder = new EventEncoder({ accept: request.headers.accept });
     response.writeHead(200, {
-      "content-type": "application/x-ndjson; charset=utf-8",
+      "content-type": `${encoder.getContentType()}; charset=utf-8`,
       "cache-control": "no-store",
       connection: "keep-alive",
       "transfer-encoding": "chunked",
     });
 
-    writeEvent(response, {
-      type: "thread",
-      thread,
+    writeEvent(response, encoder, {
+      type: EventType.RUN_STARTED,
+      runId: input.runId,
+      threadId: input.threadId,
     });
     await delay(120);
-    writeEvent(response, {
-      type: "assistant_snapshot",
-      assistantText: `Streaming reply for ${model}\n\n- thinking: ${
+    if (/release checklist skill/i.test(prompt)) {
+      writeEvent(response, encoder, {
+        type: EventType.TOOL_CALL_START,
+        toolCallId: "tool-1",
+        toolCallName: "release-checklist",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.TOOL_CALL_ARGS,
+        delta: '{"scope":"mobile"}',
+        toolCallId: "tool-1",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.TOOL_CALL_END,
+        toolCallId: "tool-1",
+      });
+      await delay(120);
+      writeEvent(response, encoder, {
+        type: EventType.CUSTOM,
+        name: "gemma-skill-result",
+        value: {
+          exitCode: 0,
+          toolCallId: "tool-1",
+        },
+      });
+      writeEvent(response, encoder, {
+        type: EventType.TOOL_CALL_RESULT,
+        content: "Checklist drafted for mobile release.",
+        messageId: "tool-result-1",
+        toolCallId: "tool-1",
+      });
+      await delay(1500);
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_START,
+        messageId: "assistant-1",
+        role: "assistant",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        delta: "Release checklist ready for the mobile rollout.",
+        messageId: "assistant-1",
+      });
+
+      const assistantTurn = {
+        messageId: "turn-assistant-1",
+        sender: "assistant" as const,
+        createdAt: new Date().toISOString(),
+        bodyMarkdown: "Release checklist ready for the mobile rollout.",
+        relativePath: `agents/${agent.id}/history/${sessionId}/turn-assistant-1.md`,
+      };
+
+      completedSession = {
+        ...thread,
+        lastTurnAt: assistantTurn.createdAt,
+        summary: assistantTurn.bodyMarkdown,
+        turnCount: 2,
+        turns: [userTurn, assistantTurn],
+      };
+
+      await delay(120);
+      writeEvent(response, encoder, {
+        type: EventType.TEXT_MESSAGE_END,
+        messageId: "assistant-1",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.RUN_FINISHED,
+        outcome: {
+          type: "success",
+        },
+        runId: input.runId,
+        threadId: input.threadId,
+      });
+      response.end();
+      return;
+    }
+
+    if (thinkingEnabled) {
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_START,
+        messageId: "reasoning-1",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_MESSAGE_START,
+        messageId: "reasoning-1",
+        role: "reasoning",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_MESSAGE_CONTENT,
+        delta: "Compare the mobile layout before shipping.",
+        messageId: "reasoning-1",
+      });
+    }
+    writeEvent(response, encoder, {
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: "assistant-1",
+      role: "assistant",
+    });
+    writeEvent(response, encoder, {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      delta: `Streaming reply for ${model}\n\n- thinking: ${
         thinkingEnabled ? "on" : "off"
       }`,
-      thinkingText: thinkingEnabled
-        ? "Compare the mobile layout before shipping."
-        : undefined,
+      messageId: "assistant-1",
     });
     await delay(120);
-    writeEvent(response, {
-      type: "assistant_snapshot",
-      assistantText: `Streaming reply for ${model}\n\n- thinking: ${
-        thinkingEnabled ? "on" : "off"
-      }\n- tokens: ${maxTokens}\n- mobile: wrapped`,
-      thinkingText: thinkingEnabled
-        ? "Compare the mobile layout before shipping.\nThen confirm the streamed text stays readable."
-        : undefined,
+    if (thinkingEnabled) {
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_MESSAGE_CONTENT,
+        delta: "\nThen confirm the streamed text stays readable.",
+        messageId: "reasoning-1",
+      });
+    }
+    writeEvent(response, encoder, {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      delta: `\n- tokens: ${maxTokens}\n- mobile: wrapped`,
+      messageId: "assistant-1",
     });
     await delay(120);
 
@@ -266,12 +395,27 @@ const server = createServer(async (request, response) => {
       turns: [userTurn, assistantTurn],
     };
 
-    writeEvent(response, {
-      type: "complete",
-      response: {
-        thread: completedSession,
-        assistantTurn,
+    writeEvent(response, encoder, {
+      type: EventType.TEXT_MESSAGE_END,
+      messageId: "assistant-1",
+    });
+    if (thinkingEnabled) {
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_MESSAGE_END,
+        messageId: "reasoning-1",
+      });
+      writeEvent(response, encoder, {
+        type: EventType.REASONING_END,
+        messageId: "reasoning-1",
+      });
+    }
+    writeEvent(response, encoder, {
+      type: EventType.RUN_FINISHED,
+      outcome: {
+        type: "success",
       },
+      runId: input.runId,
+      threadId: input.threadId,
     });
     response.end();
     return;
@@ -304,8 +448,12 @@ function writeJson(
   response.end(JSON.stringify(body));
 }
 
-function writeEvent(response: ServerResponse, event: unknown): void {
-  response.write(`${JSON.stringify(event)}\n`);
+function writeEvent(
+  response: ServerResponse,
+  encoder: EventEncoder,
+  event: unknown
+): void {
+  response.write(encoder.encode(event as never));
 }
 
 function toSessionSummary(session: ChatSession): ChatSessionSummary {
@@ -325,4 +473,33 @@ function toSessionSummary(session: ChatSession): ChatSessionSummary {
 
 function delay(durationMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, durationMs));
+}
+
+function extractLatestUserPrompt(
+  messages: Array<{ role: string; content?: unknown }>
+) {
+  const latestUserMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (!latestUserMessage) {
+    throw new Error("AG-UI test input must include a user message.");
+  }
+  if (typeof latestUserMessage.content === "string") {
+    return latestUserMessage.content;
+  }
+  if (!Array.isArray(latestUserMessage.content)) {
+    return "";
+  }
+  return latestUserMessage.content
+    .flatMap((content) =>
+      content &&
+      typeof content === "object" &&
+      "type" in content &&
+      "text" in content &&
+      content.type === "text" &&
+      typeof content.text === "string"
+        ? [content.text]
+        : []
+    )
+    .join("\n");
 }

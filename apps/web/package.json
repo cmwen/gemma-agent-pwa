@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ag-ui/client": "^0.0.53",
+    "@ag-ui/core": "^0.0.53",
     "@gemma-agent-pwa/contracts": "workspace:*",
     "@tanstack/react-query": "^5.90.2",
     "dexie": "^4.2.1",

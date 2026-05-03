@@ -1,17 +1,52 @@
 import {
-  type AgentSummary,
-  type ChatRequest,
-  type ChatSession,
-  type ChatSessionSummary,
-  type ChatStreamEvent,
-  chatStreamEventSchema,
-  type HealthStatus,
-  type ModelDescriptor,
-  type SessionDeleteMode,
-  type SessionListState,
+  type AgentSubscriber,
+  type CustomEvent,
+  HttpAgent,
+  type Message,
+} from "@ag-ui/client";
+import type {
+  AgentSummary,
+  ChatRequest,
+  ChatSession,
+  ChatSessionSummary,
+  ChatStreamEvent,
+  ChatTurn,
+  HealthStatus,
+  ModelDescriptor,
+  SessionDeleteMode,
+  SessionListState,
 } from "@gemma-agent-pwa/contracts";
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const GEMMA_SKILL_RESULT_EVENT = "gemma-skill-result";
+
+interface StreamChatCallbacks {
+  signal?: AbortSignal;
+  thread?: ChatSession;
+  onEvent: (event: ChatStreamEvent) => void;
+}
+
+interface GemmaSkillResultMeta {
+  exitCode: number;
+  toolCallId: string;
+}
+
+interface PendingToolCall {
+  exitCode?: number;
+  skillInput: string;
+  skillName: string;
+  toolCallId: string;
+}
+
+const COMPLETE_SKILL_CALL_BLOCKS = [
+  /<skill_call\s+name="[^"]+">[\s\S]*?<\/skill_call>/g,
+  /<\|tool_call>\s*call(?:\s*:\s*|\s+)[A-Za-z0-9_.-]+[\s\S]*?(?:<\|tool_call\|>|<tool_call\|>|<\/tool_call>)/g,
+];
+const PARTIAL_SKILL_CALL_MARKERS = [
+  "<skill_call",
+  "<|tool_call>",
+  "<tool_call",
+];
 
 export async function getHealth(): Promise<HealthStatus> {
   return fetchJson<HealthStatus>(`${API_ROOT}/health`);
@@ -72,45 +107,363 @@ export async function restoreSession(
 export async function streamChat(
   agentId: string,
   request: ChatRequest,
-  callbacks: {
-    signal?: AbortSignal;
-    onEvent: (event: ChatStreamEvent) => void;
-  }
+  callbacks: StreamChatCallbacks
 ): Promise<void> {
-  const response = await fetch(`${API_ROOT}/agents/${agentId}/chat`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(request),
-    signal: callbacks.signal,
+  const prompt = request.prompt.trim();
+  const threadId = request.sessionId ?? createId("thread");
+  const optimisticThread = createOptimisticThread({
+    agentId,
+    existingThread: callbacks.thread,
+    prompt,
+    request,
+    threadId,
   });
-  if (!response.ok) {
-    throw new Error(
-      await getResponseErrorMessage(response, "Chat request failed")
+  const toolCalls = new Map<string, PendingToolCall>();
+  let assistantTextRaw = "";
+  let assistantText = "";
+  let thinkingText = "";
+  let streamError: string | undefined;
+
+  callbacks.onEvent({
+    type: "thread",
+    thread: optimisticThread,
+  });
+
+  const agent = new HttpAgent({
+    initialMessages: buildRunAgentMessages(callbacks.thread, prompt),
+    initialState: {},
+    threadId,
+    url: `${API_ROOT}/agents/${agentId}/chat`,
+  });
+  const abortListener = () => agent.abortRun();
+  callbacks.signal?.addEventListener("abort", abortListener);
+
+  try {
+    await agent.runAgent(
+      {
+        context: [],
+        forwardedProps: buildForwardedProps(request, optimisticThread.title),
+        runId: createId("run"),
+        tools: [],
+      },
+      createStreamSubscriber({
+        onAssistantSnapshot() {
+          callbacks.onEvent({
+            type: "assistant_snapshot",
+            ...(assistantText ? { assistantText } : {}),
+            ...(thinkingText ? { thinkingText } : {}),
+          });
+        },
+        onError(error) {
+          streamError = error;
+          callbacks.onEvent({
+            type: "error",
+            error,
+          });
+        },
+        onReasoningDelta(delta) {
+          thinkingText += delta;
+        },
+        onSkillCall(skillCall) {
+          callbacks.onEvent({
+            type: "skill_call",
+            skillCallId: skillCall.toolCallId,
+            skillInput: skillCall.skillInput,
+            skillName: skillCall.skillName,
+          });
+        },
+        onSkillMeta(meta) {
+          const current = toolCalls.get(meta.toolCallId);
+          if (!current) {
+            return;
+          }
+          current.exitCode = meta.exitCode;
+        },
+        onSkillResult(toolCallId, skillOutput) {
+          const skillCall = toolCalls.get(toolCallId);
+          callbacks.onEvent({
+            type: "skill_result",
+            exitCode: skillCall?.exitCode ?? 0,
+            skillCallId: toolCallId,
+            skillName: skillCall?.skillName ?? "unknown-skill",
+            skillOutput,
+          });
+        },
+        onTextDelta(delta) {
+          assistantTextRaw += delta;
+          assistantText = sanitizeVisibleAssistantText(assistantTextRaw);
+        },
+        toolCalls,
+      })
     );
-  }
-  if (!response.body) {
-    throw new Error("The chat stream did not return a readable body.");
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const parser = createChatStreamEventParser();
-
-  while (true) {
-    const { done, value } = await reader.read();
-    const chunk = decoder.decode(value, { stream: !done });
-    for (const event of parser.pushChunk(chunk)) {
-      callbacks.onEvent(event);
+  } catch (error) {
+    if (callbacks.signal?.aborted) {
+      throw new DOMException("The operation was aborted.", "AbortError");
     }
-    if (done) {
-      for (const event of parser.flush()) {
-        callbacks.onEvent(event);
+
+    if (streamError) {
+      return;
+    }
+
+    throw new Error(
+      error instanceof Error ? error.message : "Unknown AG-UI stream error."
+    );
+  } finally {
+    callbacks.signal?.removeEventListener("abort", abortListener);
+  }
+
+  if (streamError) {
+    return;
+  }
+
+  const assistantTurn = createAssistantTurn({
+    agentId,
+    assistantText,
+    threadId,
+    thinkingText,
+  });
+  const completedThread = createCompletedThread(
+    optimisticThread,
+    assistantTurn
+  );
+  callbacks.onEvent({
+    type: "complete",
+    response: {
+      assistantTurn,
+      thread: completedThread,
+    },
+  });
+}
+
+function createStreamSubscriber(options: {
+  onAssistantSnapshot: () => void;
+  onError: (error: string) => void;
+  onReasoningDelta: (delta: string) => void;
+  onSkillCall: (skillCall: PendingToolCall) => void;
+  onSkillMeta: (meta: GemmaSkillResultMeta) => void;
+  onSkillResult: (toolCallId: string, skillOutput: string) => void;
+  onTextDelta: (delta: string) => void;
+  toolCalls: Map<string, PendingToolCall>;
+}): AgentSubscriber {
+  return {
+    onCustomEvent({ event }) {
+      const meta = parseGemmaSkillResultMeta(event);
+      if (meta) {
+        options.onSkillMeta(meta);
       }
-      break;
-    }
+    },
+    onReasoningMessageContentEvent({ event }) {
+      options.onReasoningDelta(event.delta);
+      options.onAssistantSnapshot();
+    },
+    onRunErrorEvent({ event }) {
+      options.onError(event.message);
+    },
+    onTextMessageContentEvent({ event }) {
+      options.onTextDelta(event.delta);
+      options.onAssistantSnapshot();
+    },
+    onToolCallArgsEvent({ event }) {
+      const current = options.toolCalls.get(event.toolCallId);
+      if (!current) {
+        return;
+      }
+      current.skillInput += event.delta;
+    },
+    onToolCallEndEvent({ event }) {
+      const current = options.toolCalls.get(event.toolCallId);
+      if (!current) {
+        return;
+      }
+      options.onSkillCall(current);
+    },
+    onToolCallResultEvent({ event }) {
+      options.onSkillResult(event.toolCallId, event.content);
+      options.toolCalls.delete(event.toolCallId);
+    },
+    onToolCallStartEvent({ event }) {
+      options.toolCalls.set(event.toolCallId, {
+        skillInput: "",
+        skillName: event.toolCallName,
+        toolCallId: event.toolCallId,
+      });
+    },
+  };
+}
+
+function sanitizeVisibleAssistantText(text: string): string {
+  let sanitized = text;
+
+  for (const pattern of COMPLETE_SKILL_CALL_BLOCKS) {
+    sanitized = sanitized.replace(pattern, "");
   }
+
+  const firstPartialIndex = PARTIAL_SKILL_CALL_MARKERS.reduce<number>(
+    (currentIndex, marker) => {
+      const markerIndex = sanitized.indexOf(marker);
+      if (markerIndex < 0) {
+        return currentIndex;
+      }
+      return currentIndex < 0
+        ? markerIndex
+        : Math.min(currentIndex, markerIndex);
+    },
+    -1
+  );
+
+  return firstPartialIndex >= 0
+    ? sanitized.slice(0, firstPartialIndex)
+    : sanitized;
+}
+
+function buildRunAgentMessages(
+  thread: ChatSession | undefined,
+  prompt: string
+): Message[] {
+  const history = (thread?.turns ?? [])
+    .filter(
+      (turn): turn is ChatTurn & { sender: "assistant" | "user" } =>
+        turn.sender === "assistant" || turn.sender === "user"
+    )
+    .map<Message>((turn) => ({
+      content: turn.bodyMarkdown,
+      id: turn.messageId,
+      role: turn.sender,
+    }));
+
+  return [
+    ...history,
+    {
+      content: prompt,
+      id: createId("user"),
+      role: "user",
+    },
+  ];
+}
+
+function buildForwardedProps(request: ChatRequest, title: string) {
+  return {
+    ...(request.config ? { config: request.config } : {}),
+    title,
+  };
+}
+
+function createOptimisticThread(input: {
+  agentId: string;
+  existingThread: ChatSession | undefined;
+  prompt: string;
+  request: ChatRequest;
+  threadId: string;
+}): ChatSession {
+  const createdAt = new Date().toISOString();
+  const title =
+    input.request.title?.trim() ||
+    input.existingThread?.title ||
+    input.prompt.slice(0, 72) ||
+    "New Gemma chat";
+  const userTurn: ChatTurn = {
+    bodyMarkdown: input.prompt,
+    createdAt,
+    messageId: createId("turn-user"),
+    relativePath: "in-flight",
+    sender: "user",
+  };
+
+  if (!input.existingThread) {
+    return {
+      agentId: input.agentId,
+      manifestPath: `agents/${input.agentId}/history/${input.threadId}/SESSION.md`,
+      sessionId: input.threadId,
+      startedAt: createdAt,
+      summary: "Pending summary.",
+      title,
+      turnCount: 1,
+      turns: [userTurn],
+      lastTurnAt: createdAt,
+    };
+  }
+
+  return {
+    ...input.existingThread,
+    lastTurnAt: createdAt,
+    title,
+    turnCount: input.existingThread.turns.length + 1,
+    turns: [...input.existingThread.turns, userTurn],
+  };
+}
+
+function createAssistantTurn(input: {
+  agentId: string;
+  assistantText: string;
+  threadId: string;
+  thinkingText: string;
+}): ChatTurn {
+  const createdAt = new Date().toISOString();
+  return {
+    bodyMarkdown: input.assistantText,
+    createdAt,
+    messageId: createId("turn-assistant"),
+    relativePath: `agents/${input.agentId}/history/${input.threadId}/assistant.md`,
+    sender: "assistant",
+    ...(input.thinkingText ? { thinkingMarkdown: input.thinkingText } : {}),
+  };
+}
+
+function createCompletedThread(
+  optimisticThread: ChatSession,
+  assistantTurn: ChatTurn
+): ChatSession {
+  const turns = [...optimisticThread.turns, assistantTurn];
+  return {
+    ...optimisticThread,
+    lastTurnAt: assistantTurn.createdAt,
+    summary: summarizeAssistantText(assistantTurn.bodyMarkdown),
+    turnCount: turns.length,
+    turns,
+  };
+}
+
+function summarizeAssistantText(assistantText: string): string {
+  const firstSentence = assistantText
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .find((sentence) => sentence.trim().length > 0);
+  return firstSentence?.slice(0, 240) ?? "Pending summary.";
+}
+
+function parseGemmaSkillResultMeta(
+  event: CustomEvent
+): GemmaSkillResultMeta | undefined {
+  if (event.name !== GEMMA_SKILL_RESULT_EVENT) {
+    return undefined;
+  }
+
+  const value =
+    event.value &&
+    typeof event.value === "object" &&
+    !Array.isArray(event.value)
+      ? (event.value as Record<string, unknown>)
+      : undefined;
+  if (
+    typeof value?.toolCallId !== "string" ||
+    typeof value.exitCode !== "number"
+  ) {
+    return undefined;
+  }
+
+  return {
+    exitCode: value.exitCode,
+    toolCallId: value.toolCallId,
+  };
+}
+
+function createId(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) {
+    return `${prefix}-${uuid}`;
+  }
+
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -125,77 +478,6 @@ async function fetchOk(url: string, init?: RequestInit): Promise<void> {
   const response = await fetch(url, init);
   if (!response.ok) {
     throw new Error(await getResponseErrorMessage(response, "Request failed"));
-  }
-}
-
-function createChatStreamEventParser(): {
-  flush: () => ChatStreamEvent[];
-  pushChunk: (chunk: string) => ChatStreamEvent[];
-} {
-  let buffer = "";
-
-  return {
-    pushChunk(chunk) {
-      buffer += chunk;
-      const result = consumeChatStreamBuffer(buffer);
-      buffer = result.remainingBuffer;
-      return result.events;
-    },
-    flush() {
-      const result = consumeChatStreamBuffer(buffer, { flush: true });
-      buffer = result.remainingBuffer;
-      return result.events;
-    },
-  };
-}
-
-function consumeChatStreamBuffer(
-  buffer: string,
-  options?: { flush?: boolean }
-): {
-  events: ChatStreamEvent[];
-  remainingBuffer: string;
-} {
-  const events: ChatStreamEvent[] = [];
-  let remainingBuffer = buffer;
-  let newlineIndex = remainingBuffer.indexOf("\n");
-
-  while (newlineIndex >= 0) {
-    const rawLine = remainingBuffer.slice(0, newlineIndex);
-    remainingBuffer = remainingBuffer.slice(newlineIndex + 1);
-    const event = parseChatStreamEventLine(rawLine);
-    if (event) {
-      events.push(event);
-    }
-    newlineIndex = remainingBuffer.indexOf("\n");
-  }
-
-  if (options?.flush) {
-    const event = parseChatStreamEventLine(remainingBuffer);
-    remainingBuffer = "";
-    if (event) {
-      events.push(event);
-    }
-  }
-
-  return { events, remainingBuffer };
-}
-
-function parseChatStreamEventLine(
-  rawLine: string
-): ChatStreamEvent | undefined {
-  const line = rawLine.trim();
-  if (!line) {
-    return undefined;
-  }
-
-  try {
-    return chatStreamEventSchema.parse(JSON.parse(line));
-  } catch (error) {
-    if (error instanceof SyntaxError || error instanceof Error) {
-      throw new Error(`Invalid chat stream event payload: ${line}`);
-    }
-    throw error;
   }
 }
 
@@ -253,10 +535,13 @@ function payloadMessage(
 }
 
 export const __testing = {
-  consumeChatStreamBuffer,
-  createChatStreamEventParser,
+  buildRunAgentMessages,
+  createCompletedThread,
+  createOptimisticThread,
   getResponseErrorMessage,
-  parseChatStreamEventLine,
+  parseGemmaSkillResultMeta,
   parseJsonRecord,
   payloadMessage,
+  sanitizeVisibleAssistantText,
+  summarizeAssistantText,
 };

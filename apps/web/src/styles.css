@@ -580,6 +580,11 @@ kbd {
   background: var(--panel-bg-muted);
 }
 
+.message-card.tool {
+  align-self: flex-start;
+  background: var(--code-bg-soft);
+}
+
 .message-header {
   display: flex;
   flex-wrap: wrap;
@@ -668,12 +673,55 @@ kbd {
   min-width: 0;
 }
 
+.skill-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.skill-activity-details {
+  min-width: 0;
+}
+
+.skill-activity-details summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  color: var(--accent-text);
+}
+
+.skill-activity-block {
+  margin-top: 0.7rem;
+}
+
+.skill-activity-block strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.skill-activity-block pre {
+  overflow-x: auto;
+  margin: 0;
+  padding: 0.85rem;
+  border-radius: 0.85rem;
+  background: var(--code-bg-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .thinking-details summary {
   cursor: pointer;
   color: var(--accent-text);
 }
 
-.thinking-details pre {
+.thinking-details pre,
+.skill-activity-block pre {
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -752,6 +800,13 @@ kbd {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
+  margin-top: 0.9rem;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
   margin-top: 0.9rem;
 }
 
@@ -1275,6 +1330,10 @@ kbd {
 
   .detail-controls {
     grid-template-columns: 1fr;
+  }
+
+  .detail-actions > * {
+    flex: 1 1 0;
   }
 
   .message-card {

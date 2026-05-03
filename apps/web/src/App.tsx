@@ -1,6 +1,7 @@
 import {
   type ChatSession,
   type ChatSessionSummary,
+  type ChatStreamEvent,
   type ChatTurn,
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_PRESETS,
@@ -23,14 +24,21 @@ import remarkGfm from "remark-gfm";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
+  buildCompletionNotification,
   buildDetailPanelClassName,
   buildMessages,
   buildStreamConsoleEntry,
   filterCommandItems,
+  formatNotificationPermissionLabel,
   formatTime,
   getNextFocusableIndex,
   getNextTheme,
+  getNotificationPermission,
   isEditableElement,
+  isNotificationSupported,
+  type StreamSkillActivity,
+  shouldBlurActiveEditableElementOnPointerDown,
+  shouldSendCompletionNotification,
 } from "./app-utils";
 import {
   deleteSession as deleteSessionRequest,
@@ -55,6 +63,7 @@ interface StreamingState {
   assistantText?: string;
   thinkingText?: string;
   error?: string;
+  skillActivities?: StreamSkillActivity[];
 }
 
 interface CommandItem {
@@ -110,6 +119,9 @@ export default function App() {
   const drafts = useAppStore((state) => state.drafts);
   const themeMode = useAppStore((state) => state.themeMode);
   const modelDetailsOpen = useAppStore((state) => state.modelDetailsOpen);
+  const notificationsEnabled = useAppStore(
+    (state) => state.notificationsEnabled
+  );
   const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
   const setSelectedSessionId = useAppStore(
     (state) => state.setSelectedSessionId
@@ -117,6 +129,9 @@ export default function App() {
   const setDraft = useAppStore((state) => state.setDraft);
   const setThemeMode = useAppStore((state) => state.setThemeMode);
   const setModelDetailsOpen = useAppStore((state) => state.setModelDetailsOpen);
+  const setNotificationsEnabled = useAppStore(
+    (state) => state.setNotificationsEnabled
+  );
 
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
     {}
@@ -131,6 +146,10 @@ export default function App() {
     agents: PANEL_WIDTH_LIMITS.agents.defaultWidth,
     history: PANEL_WIDTH_LIMITS.history.defaultWidth,
   });
+  const [notificationPermission, setNotificationPermission] = useState(
+    getNotificationPermission()
+  );
+  const [notificationError, setNotificationError] = useState<string>();
   const [streaming, setStreaming] = useState<StreamingState>({
     sending: false,
   });
@@ -157,6 +176,8 @@ export default function App() {
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const activeResizePanelRef = useRef<ResizablePanel | null>(null);
   const desktopPanelWidthsRef = useRef(desktopPanelWidths);
+  const notificationsEnabledRef = useRef(notificationsEnabled);
+  const notificationPermissionRef = useRef(notificationPermission);
 
   const healthQuery = useQuery({
     queryKey: ["health"],
@@ -284,7 +305,7 @@ export default function App() {
       topP: sessionConfig?.topP ?? agentConfig?.topP,
     });
     setLiveThread(undefined);
-    setStreaming({ sending: false });
+    setStreaming({ sending: false, skillActivities: [] });
   }, [agentDetailQuery.data, thread?.sessionId, modelsQuery.data]);
 
   const draftKey = buildDraftKey(selectedAgentId, activeSessionId);
@@ -416,8 +437,27 @@ export default function App() {
         keywords: ["theme", "light", "dark", "appearance"],
         run: () => handleThemeToggle(),
       },
+      {
+        id: "toggle-notifications",
+        label: notificationsEnabled
+          ? "Disable reply notifications"
+          : "Enable reply notifications",
+        description:
+          notificationPermission === "granted"
+            ? "Toggle browser notifications for completed background replies."
+            : "Request browser permission for completed background reply notifications.",
+        group: "Actions",
+        keywords: ["notifications", "notify", "alerts", "background", "pwa"],
+        run: () => void handleNotificationsToggle(),
+      },
     ],
-    [historyView, modelDetailsOpen, themeMode]
+    [
+      historyView,
+      modelDetailsOpen,
+      notificationPermission,
+      notificationsEnabled,
+      themeMode,
+    ]
   );
   const visibleCommandItems = useMemo(() => {
     return filterCommandItems(commandItems, commandQuery);
@@ -442,6 +482,14 @@ export default function App() {
   }, [desktopPanelWidths]);
 
   useEffect(() => {
+    notificationsEnabledRef.current = notificationsEnabled;
+  }, [notificationsEnabled]);
+
+  useEffect(() => {
+    notificationPermissionRef.current = notificationPermission;
+  }, [notificationPermission]);
+
+  useEffect(() => {
     const timeline = timelineRef.current;
     if (!timeline) {
       return;
@@ -457,6 +505,34 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
   }, [themeMode]);
+
+  useEffect(() => {
+    function syncNotificationPermission() {
+      setNotificationPermission(getNotificationPermission());
+    }
+
+    syncNotificationPermission();
+    window.addEventListener("focus", syncNotificationPermission);
+    document.addEventListener("visibilitychange", syncNotificationPermission);
+    return () => {
+      window.removeEventListener("focus", syncNotificationPermission);
+      document.removeEventListener(
+        "visibilitychange",
+        syncNotificationPermission
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (notificationPermission === "granted") {
+      setNotificationError(undefined);
+      return;
+    }
+
+    if (notificationsEnabled) {
+      setNotificationsEnabled(false);
+    }
+  }, [notificationPermission, notificationsEnabled, setNotificationsEnabled]);
 
   useEffect(() => {
     if (!isCommandPaletteOpen) {
@@ -547,11 +623,39 @@ export default function App() {
     };
   }, [modelDetailsOpen]);
 
-  function focusSection(section: MobileSection) {
+  function handleAppShellPointerDownCapture(
+    event: ReactPointerEvent<HTMLDivElement>
+  ) {
+    if (
+      isCommandPaletteOpen ||
+      isHelpOpen ||
+      !shouldBlurActiveEditableElementOnPointerDown({
+        activeElement: document.activeElement,
+        desktopBreakpoint: DESKTOP_BREAKPOINT,
+        pointerType: event.pointerType,
+        target: event.target,
+        viewportWidth: window.innerWidth,
+      })
+    ) {
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  }
+
+  function focusSection(
+    section: MobileSection,
+    options?: { focusTarget?: boolean }
+  ) {
     if (section === "details" && !modelDetailsOpen) {
       setModelDetailsOpen(true);
     }
     setMobileSection(section);
+    if (options?.focusTarget === false) {
+      return;
+    }
     requestAnimationFrame(() => {
       switch (section) {
         case "agents":
@@ -608,6 +712,109 @@ export default function App() {
 
   function handleThemeToggle() {
     setThemeMode(getNextTheme(themeMode));
+  }
+
+  async function handleNotificationsToggle() {
+    if (notificationsEnabled) {
+      setNotificationsEnabled(false);
+      setNotificationError(undefined);
+      return;
+    }
+
+    if (!isNotificationSupported()) {
+      setNotificationPermission("unsupported");
+      setNotificationError("This browser does not support notifications.");
+      return;
+    }
+
+    if (notificationPermissionRef.current === "denied") {
+      setNotificationError(
+        "Notifications are blocked for this site. Allow them in your browser settings, then try again."
+      );
+      return;
+    }
+
+    const nextPermission =
+      notificationPermissionRef.current === "granted"
+        ? "granted"
+        : await Notification.requestPermission();
+
+    setNotificationPermission(nextPermission);
+
+    if (nextPermission !== "granted") {
+      setNotificationsEnabled(false);
+      setNotificationError(
+        nextPermission === "denied"
+          ? "Notifications are blocked for this site. Allow them in your browser settings, then try again."
+          : "Notification permission was not granted."
+      );
+      return;
+    }
+
+    setNotificationsEnabled(true);
+    setNotificationError(undefined);
+  }
+
+  async function showCompletionNotification(thread: ChatSession) {
+    const icon = new URL(
+      `${import.meta.env.BASE_URL}favicon.svg`,
+      window.location.origin
+    ).toString();
+    const notification = buildCompletionNotification({
+      agentTitle: selectedAgent?.title,
+      assistantMarkdown: thread.turns.at(-1)?.bodyMarkdown,
+      sessionId: thread.sessionId,
+      sessionTitle: thread.title,
+    });
+
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration?.showNotification) {
+        await registration.showNotification(notification.title, {
+          badge: icon,
+          body: notification.body,
+          icon,
+          tag: notification.tag,
+        });
+        return;
+      }
+    }
+
+    if (!isNotificationSupported()) {
+      throw new Error("This browser does not support notifications.");
+    }
+
+    new Notification(notification.title, {
+      body: notification.body,
+      icon,
+      tag: notification.tag,
+    });
+  }
+
+  function maybeNotifyOnCompletion(thread: ChatSession) {
+    if (
+      !shouldSendCompletionNotification({
+        notificationsEnabled: notificationsEnabledRef.current,
+        permission: notificationPermissionRef.current,
+        documentHidden: document.hidden,
+        windowHasFocus: document.hasFocus(),
+      })
+    ) {
+      return;
+    }
+
+    void showCompletionNotification(thread).catch((error) => {
+      const message =
+        error instanceof Error ? error.message : "Notification failed.";
+      setNotificationError(message);
+      appendConsoleEntry({
+        id: `${new Date().toISOString()}-notification-error`,
+        summary: "Notification error",
+        detail: message,
+        timestamp: new Date().toISOString(),
+        tone: "error",
+      });
+    });
   }
 
   function getDesktopDetailWidth() {
@@ -874,6 +1081,7 @@ export default function App() {
     setStreamConsoleEntries([]);
     setStreaming({
       sending: true,
+      skillActivities: [],
     });
 
     const prompt = draft.trim();
@@ -890,6 +1098,7 @@ export default function App() {
         },
         {
           signal: controller.signal,
+          thread,
           onEvent: (event) => {
             appendConsoleEntry(buildStreamConsoleEntry(event));
             switch (event.type) {
@@ -911,6 +1120,16 @@ export default function App() {
                   ...state,
                   assistantText: undefined,
                   thinkingText: undefined,
+                  skillActivities: [
+                    ...(state.skillActivities ?? []),
+                    {
+                      id:
+                        event.skillCallId ??
+                        `${event.skillName}-${Date.now()}-${(state.skillActivities ?? []).length}`,
+                      skillInput: event.skillInput,
+                      skillName: event.skillName,
+                    },
+                  ],
                 }));
                 break;
               case "skill_result":
@@ -918,6 +1137,10 @@ export default function App() {
                   ...state,
                   assistantText: undefined,
                   thinkingText: undefined,
+                  skillActivities: resolveSkillActivities(
+                    state.skillActivities ?? [],
+                    event
+                  ),
                 }));
                 break;
               case "complete":
@@ -936,14 +1159,17 @@ export default function App() {
                     event.response.thread.sessionId,
                   ],
                 });
-                setStreaming({
+                setStreaming((state) => ({
                   sending: false,
-                });
+                  skillActivities: state.skillActivities ?? [],
+                }));
+                maybeNotifyOnCompletion(event.response.thread);
                 break;
               case "error":
                 setStreaming({
                   sending: false,
                   error: event.error,
+                  skillActivities: [],
                 });
                 setDraft(draftKey, prompt);
                 break;
@@ -964,6 +1190,7 @@ export default function App() {
       setStreaming({
         sending: false,
         error: error instanceof Error ? error.message : "Unknown error.",
+        skillActivities: [],
       });
       setDraft(draftKey, prompt);
     } finally {
@@ -983,6 +1210,7 @@ export default function App() {
     setStreaming({
       sending: false,
       error: "Generation stopped.",
+      skillActivities: [],
     });
   }
 
@@ -995,7 +1223,7 @@ export default function App() {
     setSelectedSessionId(selectedAgentId, null);
     setLiveThread(undefined);
     setStreamConsoleEntries([]);
-    setStreaming({ sending: false });
+    setStreaming({ sending: false, skillActivities: [] });
     setMobileSection("chat");
   }
 
@@ -1043,7 +1271,7 @@ export default function App() {
         if (activeSessionId === session.sessionId) {
           setSelectedSessionId(selectedAgentId, null);
           setLiveThread(undefined);
-          setStreaming({ sending: false });
+          setStreaming({ sending: false, skillActivities: [] });
           setMobileSection("history");
         }
       }
@@ -1130,6 +1358,7 @@ export default function App() {
   return (
     <div
       className={buildAppShellClassName(modelDetailsOpen)}
+      onPointerDownCapture={handleAppShellPointerDownCapture}
       ref={appShellRef}
       style={desktopShellStyle}
     >
@@ -1199,7 +1428,7 @@ export default function App() {
             className={mobileSection === section.id ? "is-active" : ""}
             data-roving-focus="true"
             key={section.id}
-            onClick={() => focusSection(section.id)}
+            onClick={() => focusSection(section.id, { focusTarget: false })}
             type="button"
           >
             {section.label}
@@ -1225,7 +1454,7 @@ export default function App() {
             New chat
           </button>
         </div>
-        <div className="agent-list">
+        <div className="agent-list" data-mobile-scroll-region="true">
           {agentsQuery.data?.map((agent) => (
             <button
               aria-pressed={agent.id === selectedAgentId}
@@ -1237,7 +1466,9 @@ export default function App() {
               }
               onClick={() => {
                 setSelectedAgentId(agent.id);
-                focusSection("chat");
+                focusSection("chat", {
+                  focusTarget: window.innerWidth >= DESKTOP_BREAKPOINT,
+                });
               }}
               type="button"
             >
@@ -1312,7 +1543,7 @@ export default function App() {
           </div>
         </div>
         {historyError ? <p className="panel-error">{historyError}</p> : null}
-        <div className="session-list">
+        <div className="session-list" data-mobile-scroll-region="true">
           {(sessionsQuery.data ?? []).map((session) => (
             <article
               className={`session-card ${session.sessionId === activeSessionId ? "is-active" : ""}`}
@@ -1330,7 +1561,9 @@ export default function App() {
                     return;
                   }
                   setSelectedSessionId(selectedAgentId, session.sessionId);
-                  focusSection("chat");
+                  focusSection("chat", {
+                    focusTarget: window.innerWidth >= DESKTOP_BREAKPOINT,
+                  });
                 }}
                 type="button"
               >
@@ -1462,6 +1695,7 @@ export default function App() {
           aria-label="Conversation timeline"
           aria-live="polite"
           className="timeline"
+          data-mobile-scroll-region="true"
           ref={timelineRef}
           role="log"
         >
@@ -1478,6 +1712,7 @@ export default function App() {
             messages.map((message) => (
               <MessageCard
                 key={message.key}
+                skillActivities={message.skillActivities}
                 turn={message.turn}
                 streaming={message.streaming}
               />
@@ -1569,7 +1804,11 @@ export default function App() {
               {modelDetailsOpen ? "Hide details" : "Show details"}
             </button>
           </div>
-          <div className="detail-panel-content" id="agent-details-content">
+          <div
+            className="detail-panel-content"
+            data-mobile-scroll-region="true"
+            id="agent-details-content"
+          >
             <section className="detail-section">
               <h3>Agent</h3>
               <p>
@@ -1633,6 +1872,41 @@ export default function App() {
                 ) : null}
                 <span className="chip">{modelTone}</span>
               </div>
+            </section>
+            <section className="detail-section">
+              <h3>Notifications</h3>
+              <p>
+                Get a browser notification when a reply finishes while the app
+                is in the background.
+              </p>
+              <div className="chip-row">
+                <span className="chip">
+                  {notificationsEnabled ? "Enabled" : "Disabled"}
+                </span>
+                <span className="chip">
+                  Permission:{" "}
+                  {formatNotificationPermissionLabel(notificationPermission)}
+                </span>
+              </div>
+              <div className="detail-actions">
+                <button
+                  className="secondary-button"
+                  onClick={() => void handleNotificationsToggle()}
+                  type="button"
+                >
+                  {notificationsEnabled
+                    ? "Disable notifications"
+                    : "Enable notifications"}
+                </button>
+              </div>
+              {notificationError ? (
+                <p className="error-text detail-hint">{notificationError}</p>
+              ) : (
+                <p className="support-text detail-hint">
+                  Notifications stay local to this device and only fire after a
+                  completed reply.
+                </p>
+              )}
             </section>
             <section className="detail-section" id="model-details-panel">
               <h3>Model details</h3>
@@ -1930,22 +2204,72 @@ export default function App() {
   );
 }
 
-function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
+function MessageCard(props: {
+  skillActivities?: StreamSkillActivity[];
+  turn: ChatTurn;
+  streaming?: boolean;
+}) {
+  const hasBody = props.turn.bodyMarkdown.trim().length > 0;
+  const label =
+    props.turn.sender === "user"
+      ? "You"
+      : props.turn.sender === "tool"
+        ? "Skill"
+        : "Assistant";
+
   return (
     <article
-      className={`message-card ${props.turn.sender === "user" ? "user" : "assistant"}`}
+      className={`message-card ${
+        props.turn.sender === "user"
+          ? "user"
+          : props.turn.sender === "tool"
+            ? "tool"
+            : "assistant"
+      }`}
     >
       <div className="message-header">
-        <strong>{props.turn.sender === "user" ? "You" : "Assistant"}</strong>
+        <strong>{label}</strong>
         <span>
           {props.streaming ? "Streaming..." : formatTime(props.turn.createdAt)}
         </span>
       </div>
-      <div className={`message-body ${props.streaming ? "is-streaming" : ""}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {props.turn.bodyMarkdown}
-        </ReactMarkdown>
-      </div>
+      {hasBody ? (
+        <div
+          className={`message-body ${props.streaming ? "is-streaming" : ""}`}
+        >
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {props.turn.bodyMarkdown}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+      {props.skillActivities?.length ? (
+        <div className="skill-activity-list">
+          {props.skillActivities.map((activity) => (
+            <details className="skill-activity-details" key={activity.id}>
+              <summary>
+                <span>{`Skill call · ${activity.skillName}`}</span>
+                <span>
+                  {activity.exitCode === undefined
+                    ? "Running"
+                    : `Exit ${activity.exitCode}`}
+                </span>
+              </summary>
+              {activity.skillInput ? (
+                <div className="skill-activity-block">
+                  <strong>Input</strong>
+                  <pre>{activity.skillInput}</pre>
+                </div>
+              ) : null}
+              {activity.skillOutput !== undefined ? (
+                <div className="skill-activity-block">
+                  <strong>Result</strong>
+                  <pre>{activity.skillOutput}</pre>
+                </div>
+              ) : null}
+            </details>
+          ))}
+        </div>
+      ) : null}
       {props.turn.thinkingMarkdown ? (
         <details className="thinking-details">
           <summary>Reasoning trace</summary>
@@ -1954,6 +2278,52 @@ function MessageCard(props: { turn: ChatTurn; streaming?: boolean }) {
       ) : null}
     </article>
   );
+}
+
+function resolveSkillActivities(
+  activities: StreamSkillActivity[],
+  event: Extract<ChatStreamEvent, { type: "skill_result" }>
+): StreamSkillActivity[] {
+  const matchIndex = event.skillCallId
+    ? activities.findIndex((activity) => activity.id === event.skillCallId)
+    : findLatestPendingSkillActivityIndex(activities, event.skillName);
+
+  if (matchIndex < 0) {
+    return [
+      ...activities,
+      {
+        exitCode: event.exitCode,
+        id: event.skillCallId ?? `${event.skillName}-${Date.now()}-result`,
+        skillInput: "",
+        skillName: event.skillName,
+        skillOutput: event.skillOutput,
+      },
+    ];
+  }
+
+  return activities.map((activity, index) =>
+    index === matchIndex
+      ? {
+          ...activity,
+          exitCode: event.exitCode,
+          skillOutput: event.skillOutput,
+        }
+      : activity
+  );
+}
+
+function findLatestPendingSkillActivityIndex(
+  activities: StreamSkillActivity[],
+  skillName: string
+): number {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity?.skillName === skillName && activity.exitCode === undefined) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function IconButton(props: {

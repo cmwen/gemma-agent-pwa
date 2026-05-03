@@ -86,6 +86,28 @@ test("keeps reasoning traces readable on mobile after the final assistant respon
   expect(overflowMetrics.body).toBeLessThanOrEqual(1);
 });
 
+test("renders skill calls as expandable sections instead of raw markup", async ({
+  page,
+}) => {
+  await page.goto("/");
+
+  const composer = page.getByRole("textbox");
+  await composer.fill("Use the release checklist skill.");
+  await composer.press("Control+Enter");
+
+  const skillCall = page.locator(".skill-activity-details");
+  await expect(skillCall).toBeVisible();
+  await expect(page.getByText("<skill_call")).toHaveCount(0);
+
+  await skillCall.getByText("Skill call · release-checklist").click();
+  await expect(skillCall.getByText("Input")).toBeVisible();
+  await expect(skillCall.getByText('{"scope":"mobile"}')).toBeVisible();
+  await expect(skillCall.getByText("Result")).toBeVisible();
+  await expect(
+    skillCall.getByText("Checklist drafted for mobile release.")
+  ).toBeVisible();
+});
+
 test("uses the thinking toggle without overwriting the selected preset budget", async ({
   page,
 }) => {

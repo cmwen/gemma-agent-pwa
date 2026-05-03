@@ -16,8 +16,10 @@
     "dev:web": "pnpm --filter @gemma-agent-pwa/web dev"
   },
   "devDependencies": {
-    "@playwright/test": "^1.54.2",
+    "@ag-ui/core": "^0.0.53",
+    "@ag-ui/encoder": "^0.0.53",
     "@biomejs/biome": "latest",
+    "@playwright/test": "^1.54.2",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "latest",

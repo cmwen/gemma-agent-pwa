@@ -336,11 +336,13 @@ describe("runChatLoop", () => {
     );
     expect(emitEvent).toHaveBeenCalledWith({
       type: "skill_call",
+      skillCallId: "skill-call-1-calculator",
       skillName: "calculator",
       skillInput: '{"expression":"2+2"}',
     });
     expect(emitEvent).toHaveBeenCalledWith({
       type: "skill_result",
+      skillCallId: "skill-call-1-calculator",
       skillName: "calculator",
       skillOutput: "4",
       exitCode: 0,

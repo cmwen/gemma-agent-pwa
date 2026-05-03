@@ -8,11 +8,13 @@ interface AppStore {
   drafts: Record<string, string>;
   themeMode: ThemeMode;
   modelDetailsOpen: boolean;
+  notificationsEnabled: boolean;
   setSelectedAgentId: (agentId?: string) => void;
   setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
   setDraft: (key: string, value: string) => void;
   setThemeMode: (themeMode: ThemeMode) => void;
   setModelDetailsOpen: (modelDetailsOpen: boolean) => void;
+  setNotificationsEnabled: (notificationsEnabled: boolean) => void;
 }
 
 export const useAppStore = create<AppStore>()(
@@ -23,6 +25,7 @@ export const useAppStore = create<AppStore>()(
       drafts: {},
       themeMode: getPreferredTheme(),
       modelDetailsOpen: false,
+      notificationsEnabled: false,
       setSelectedAgentId: (agentId) => set({ selectedAgentId: agentId }),
       setSelectedSessionId: (agentId, sessionId) =>
         set((state) => ({
@@ -40,6 +43,8 @@ export const useAppStore = create<AppStore>()(
         })),
       setThemeMode: (themeMode) => set({ themeMode }),
       setModelDetailsOpen: (modelDetailsOpen) => set({ modelDetailsOpen }),
+      setNotificationsEnabled: (notificationsEnabled) =>
+        set({ notificationsEnabled }),
     }),
     {
       name: "gemma-agent-pwa-state",

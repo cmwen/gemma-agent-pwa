@@ -10,6 +10,7 @@ interface StreamingStateSnapshot {
   sending: boolean;
   assistantText?: string;
   thinkingText?: string;
+  skillActivities?: StreamSkillActivity[];
 }
 
 export interface CommandSearchableItem {
@@ -26,20 +27,50 @@ export interface StreamConsoleEntry {
   tone: "info" | "success" | "error";
 }
 
+export interface StreamSkillActivity {
+  exitCode?: number;
+  id: string;
+  skillInput: string;
+  skillName: string;
+  skillOutput?: string;
+}
+
 export type ThemeMode = "light" | "dark";
 export type FocusNavigationOrientation = "horizontal" | "vertical";
+export type NotificationPermissionStatus =
+  | NotificationPermission
+  | "unsupported";
+
+interface CompletionNotificationInput {
+  agentTitle?: string;
+  assistantMarkdown?: string;
+  sessionId: string;
+  sessionTitle?: string;
+}
+
+interface CompletionNotificationContent {
+  body: string;
+  tag: string;
+  title: string;
+}
 
 export function buildMessages(
   thread: ChatSession | undefined,
   streaming: StreamingStateSnapshot
-): Array<{ key: string; turn: ChatTurn; streaming?: boolean }> {
+): Array<{
+  key: string;
+  skillActivities?: StreamSkillActivity[];
+  streaming?: boolean;
+  turn: ChatTurn;
+}> {
   const turns = (thread?.turns ?? []).map((turn) => ({
     key: turn.messageId,
     turn,
   }));
   if (
-    !streaming.sending ||
-    (!streaming.assistantText && !streaming.thinkingText)
+    !streaming.assistantText &&
+    !streaming.thinkingText &&
+    !streaming.skillActivities?.length
   ) {
     return turns;
   }
@@ -47,7 +78,8 @@ export function buildMessages(
     ...turns,
     {
       key: "streaming-assistant",
-      streaming: true,
+      skillActivities: streaming.skillActivities,
+      ...(streaming.sending ? { streaming: true } : {}),
       turn: {
         messageId: "streaming-assistant",
         sender: "assistant",
@@ -117,6 +149,57 @@ export function getNextTheme(current: ThemeMode): ThemeMode {
   return current === "dark" ? "light" : "dark";
 }
 
+export function isNotificationSupported(): boolean {
+  return typeof Notification !== "undefined";
+}
+
+export function getNotificationPermission(): NotificationPermissionStatus {
+  return isNotificationSupported() ? Notification.permission : "unsupported";
+}
+
+export function formatNotificationPermissionLabel(
+  permission: NotificationPermissionStatus
+): string {
+  switch (permission) {
+    case "granted":
+      return "Allowed";
+    case "denied":
+      return "Blocked";
+    case "default":
+      return "Ask";
+    case "unsupported":
+      return "Unsupported";
+  }
+}
+
+export function shouldSendCompletionNotification(options: {
+  documentHidden: boolean;
+  notificationsEnabled: boolean;
+  permission: NotificationPermissionStatus;
+  windowHasFocus: boolean;
+}): boolean {
+  return (
+    options.notificationsEnabled &&
+    options.permission === "granted" &&
+    (options.documentHidden || !options.windowHasFocus)
+  );
+}
+
+export function buildCompletionNotification({
+  agentTitle,
+  assistantMarkdown,
+  sessionId,
+  sessionTitle,
+}: CompletionNotificationInput): CompletionNotificationContent {
+  const trimmedTitle =
+    sessionTitle?.trim() || agentTitle?.trim() || "Gemma Agent";
+  return {
+    title: `${trimmedTitle} ready`,
+    body: summarizeNotificationBody(assistantMarkdown),
+    tag: `gemma-agent-pwa-session-${sessionId}`,
+  };
+}
+
 export function filterCommandItems<T extends CommandSearchableItem>(
   commands: T[],
   query: string
@@ -182,16 +265,16 @@ export function buildStreamConsoleEntry(
       return undefined;
     case "skill_call":
       return {
-        id: `${timestamp}-skill-call-${event.skillName}`,
-        summary: `Tool call · ${event.skillName}`,
+        id: `${timestamp}-skill-call-${event.skillCallId ?? event.skillName}`,
+        summary: `Skill call · ${event.skillName}`,
         detail: event.skillInput,
         timestamp,
         tone: "info",
       };
     case "skill_result":
       return {
-        id: `${timestamp}-skill-result-${event.skillName}`,
-        summary: `Tool result · ${event.skillName} (exit ${event.exitCode})`,
+        id: `${timestamp}-skill-result-${event.skillCallId ?? event.skillName}`,
+        summary: `Skill result · ${event.skillName} (exit ${event.exitCode})`,
         detail: event.skillOutput,
         timestamp,
         tone: event.exitCode === 0 ? "success" : "error",
@@ -223,4 +306,72 @@ export function isEditableElement(target: EventTarget | null): boolean {
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement)
   );
+}
+
+function isWithinMobileScrollRegion(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  let current: Element | null = target;
+  while (current) {
+    if (
+      current instanceof HTMLElement &&
+      current.dataset.mobileScrollRegion === "true"
+    ) {
+      return true;
+    }
+    current = current.parentElement;
+  }
+
+  return false;
+}
+
+export function shouldBlurActiveEditableElementOnPointerDown(options: {
+  activeElement: Element | null;
+  desktopBreakpoint: number;
+  pointerType: string;
+  target: EventTarget | null;
+  viewportWidth: number;
+}): boolean {
+  if (
+    options.pointerType !== "touch" ||
+    options.viewportWidth >= options.desktopBreakpoint ||
+    !isEditableElement(options.activeElement)
+  ) {
+    return false;
+  }
+
+  if (
+    !(options.activeElement instanceof Element) ||
+    !(options.target instanceof Node) ||
+    options.activeElement.contains(options.target)
+  ) {
+    return false;
+  }
+
+  if (isWithinMobileScrollRegion(options.target)) {
+    return false;
+  }
+
+  return !isEditableElement(options.target);
+}
+
+function summarizeNotificationBody(markdown?: string): string {
+  const plainText = (markdown ?? "")
+    .replace(/```[\s\S]*?```/g, " code block ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[#>*_~-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!plainText) {
+    return "Your latest reply is ready.";
+  }
+
+  return plainText.length <= 140
+    ? plainText
+    : `${plainText.slice(0, 137).trimEnd()}...`;
 }

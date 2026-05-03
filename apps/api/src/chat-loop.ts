@@ -141,8 +141,10 @@ export async function runChatLoop(
     }
 
     for (const call of skillCalls) {
+      const skillCallId = buildSkillCallId(iteration, call.skillName);
       await options.emitEvent?.({
         type: "skill_call",
+        skillCallId,
         skillName: call.skillName,
         skillInput: call.input,
       });
@@ -173,6 +175,7 @@ export async function runChatLoop(
 
       await options.emitEvent?.({
         type: "skill_result",
+        skillCallId,
         skillName: skillResult.skillName,
         skillOutput: skillResult.output,
         exitCode: skillResult.exitCode,
@@ -243,9 +246,14 @@ function unavailableSkillResult(skillName: string): SkillCallResult {
   };
 }
 
+function buildSkillCallId(iteration: number, skillName: string): string {
+  return `skill-call-${iteration + 1}-${skillName}`;
+}
+
 export const __testing = {
   FINALIZE_AFTER_SKILLS_INSTRUCTION,
   MAX_SKILL_LOOP_ITERATIONS,
+  buildSkillCallId,
   unavailableSkillResult,
   updateLlmStats,
 };
