@@ -745,6 +745,20 @@ kbd {
   border-radius: 0.85rem;
 }
 
+.message-body .katex {
+  max-width: 100%;
+}
+
+.message-body .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.2rem;
+}
+
+.message-body .katex-display > .katex {
+  min-width: max-content;
+}
+
 .thinking-details {
   margin-top: 0.9rem;
   min-width: 0;

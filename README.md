@@ -119,7 +119,7 @@ pnpm lint
 - Optional reply notifications can be enabled from **Details** so completed background runs can alert you.
 - Keyboard navigation is built into the section jump controls, toggle groups, agent/session lists, and composer.
 - Shortcuts: press `/` to focus the composer, `Ctrl`/`Cmd` + `Enter` to send, and `Alt` + `1` through `4` to jump between **Agents**, **History**, **Chat**, and **Details**.
-- The mobile layout keeps section navigation visible and the composer pinned near the bottom of the active panel for easier one-handed use.
+- The mobile layout keeps the composer pinned near the bottom of the active panel, and the chat header plus top controls collapse while you scroll down through a conversation so more of the thread stays visible.
 
 `pnpm dev` now picks a matched free web/API port pair automatically, then prints
 the selected URLs before launching both processes. In dev, the browser stays on

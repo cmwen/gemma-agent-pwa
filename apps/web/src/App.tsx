@@ -24,7 +24,9 @@ import {
   useState,
 } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
@@ -115,6 +117,9 @@ type MobileSection = "agents" | "history" | "chat" | "details";
 type HistoryView = "active" | "deleted";
 type SessionAction = "soft-delete" | "restore" | "permanent-delete";
 type ResizablePanel = "agents" | "history";
+
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
+const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
 
 const MOBILE_SECTIONS: Array<{ id: MobileSection; label: string }> = [
   { id: "chat", label: "Chat" },
@@ -2901,7 +2906,7 @@ export default function App() {
   );
 }
 
-function MessageCard(props: {
+export function MessageCard(props: {
   skillActivities?: StreamSkillActivity[];
   turn: ChatTurn;
   streaming?: boolean;
@@ -2934,7 +2939,10 @@ function MessageCard(props: {
         <div
           className={`message-body ${props.streaming ? "is-streaming" : ""}`}
         >
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          <ReactMarkdown
+            rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+            remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+          >
             {props.turn.bodyMarkdown}
           </ReactMarkdown>
         </div>

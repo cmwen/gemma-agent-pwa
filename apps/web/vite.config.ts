@@ -119,6 +119,7 @@ function manualChunkName(id: string): string | undefined {
 
   if (
     id.includes("react-markdown") ||
+    id.includes("/katex/") ||
     id.includes("remark-gfm") ||
     id.includes("/remark-") ||
     id.includes("/rehype-") ||

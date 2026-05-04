@@ -1,8 +1,12 @@
 import {
+  type ChatTurn,
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_FAST_PRESET_ID,
 } from "@gemma-agent-pwa/contracts";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MessageCard } from "./App";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
@@ -206,6 +210,25 @@ describe("buildMessages", () => {
       ],
     });
     expect(messages[2]?.streaming).toBeUndefined();
+  });
+});
+
+describe("MessageCard", () => {
+  it("renders inline and block math expressions with KaTeX", () => {
+    const turn: ChatTurn = {
+      messageId: "turn-1",
+      sender: "assistant",
+      createdAt: "2026-05-03T12:00:00.000Z",
+      bodyMarkdown: "Inline math $E=mc^2$.\n\n$$\n\\int_0^1 x^2 \\, dx\n$$",
+      relativePath: "sessions/session-1/turn-1.md",
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(MessageCard, { turn })
+    );
+
+    expect(html).toContain('class="katex"');
+    expect(html).toContain('class="katex-display"');
+    expect(html).toContain("E=mc");
   });
 });
 
