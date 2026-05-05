@@ -13,7 +13,7 @@
     "@ag-ui/client": "^0.0.53",
     "@ag-ui/core": "^0.0.53",
     "@gemma-agent-pwa/contracts": "workspace:*",
-    "@tanstack/react-query": "^5.90.2",
+    "@tanstack/react-query": "^5.100.9",
     "dexie": "^4.2.1",
     "katex": "^0.16.45",
     "react": "^19.2.5",
@@ -22,8 +22,8 @@
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "workbox-window": "^7.4.0",
-    "zustand": "^5.0.8"
+    "workbox-window": "^7.4.1",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@types/react": "^19.2.14",
