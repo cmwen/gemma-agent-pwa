@@ -49,6 +49,12 @@ export type NotificationPermissionStatus =
   | NotificationPermission
   | "unsupported";
 
+const SCHEDULE_NOTIFICATION_BOOTSTRAP_POLLING_INTERVAL_MS = 900_000;
+const SCHEDULE_NOTIFICATION_NEAR_DUE_WINDOW_MS = 5 * 60_000;
+const SCHEDULE_NOTIFICATION_NEAR_DUE_POLLING_INTERVAL_MS = 60_000;
+const SCHEDULE_NOTIFICATION_SOON_POLLING_INTERVAL_MS = 600_000;
+const SCHEDULE_NOTIFICATION_FAR_POLLING_INTERVAL_MS = 1_800_000;
+
 interface CompletionNotificationInput {
   agentTitle?: string;
   assistantMarkdown?: string;
@@ -251,15 +257,74 @@ export function describeScheduledTask(
 export function getSchedulePollingInterval(options: {
   documentHidden: boolean;
   isOnline: boolean;
-  notificationsEnabled: boolean;
+  isSchedulePanelVisible: boolean;
 }): false | number {
-  if (!options.isOnline) {
+  if (!options.isOnline || options.documentHidden) {
     return false;
   }
-  if (!options.documentHidden) {
-    return 60_000;
+  return options.isSchedulePanelVisible ? 60_000 : 300_000;
+}
+
+export function getScheduleNotificationPollingInterval(options: {
+  documentHidden: boolean;
+  isOnline: boolean;
+  notificationsEnabled: boolean;
+  now?: Date;
+  tasks?: ScheduledTask[];
+}): false | number {
+  if (
+    !options.isOnline ||
+    !options.documentHidden ||
+    !options.notificationsEnabled
+  ) {
+    return false;
   }
-  return options.notificationsEnabled ? 300_000 : false;
+  const eligibleTasks = (options.tasks ?? []).filter(
+    (task) => task.enabled && task.notifyOnCompletion
+  );
+  if (eligibleTasks.length === 0) {
+    return options.tasks
+      ? false
+      : SCHEDULE_NOTIFICATION_BOOTSTRAP_POLLING_INTERVAL_MS;
+  }
+
+  if (eligibleTasks.some((task) => Boolean(task.runningAt))) {
+    return SCHEDULE_NOTIFICATION_NEAR_DUE_POLLING_INTERVAL_MS;
+  }
+
+  const nowMs = (options.now ?? new Date()).getTime();
+  const nextRunAtMs = Math.min(
+    ...eligibleTasks.map((task) => new Date(task.nextRunAt).getTime())
+  );
+  if (!Number.isFinite(nextRunAtMs)) {
+    return 300_000;
+  }
+
+  const msUntilNextRun = nextRunAtMs - nowMs;
+  if (msUntilNextRun <= SCHEDULE_NOTIFICATION_NEAR_DUE_WINDOW_MS) {
+    return SCHEDULE_NOTIFICATION_NEAR_DUE_POLLING_INTERVAL_MS;
+  }
+  if (msUntilNextRun <= 60 * 60_000) {
+    return SCHEDULE_NOTIFICATION_SOON_POLLING_INTERVAL_MS;
+  }
+  return SCHEDULE_NOTIFICATION_FAR_POLLING_INTERVAL_MS;
+}
+
+export function getHealthPollingInterval(_options: {
+  documentHidden: boolean;
+  isOnline: boolean;
+}): false | number {
+  return false;
+}
+
+export function getModelPollingInterval(options: {
+  documentHidden: boolean;
+  isOnline: boolean;
+}): false | number {
+  if (!options.isOnline || options.documentHidden) {
+    return false;
+  }
+  return 300_000;
 }
 
 export function getNewScheduledTaskNotifications(
@@ -386,6 +451,21 @@ export function isScrolledNearBottom({
   return scrollHeight - clientHeight - scrollTop <= threshold;
 }
 
+export function shouldCollapseMobileChatHeader(options: {
+  clientHeight: number;
+  collapseOffset?: number;
+  scrollHeight: number;
+  scrollTop: number;
+  scrollableThreshold?: number;
+}): boolean {
+  const maxScrollTop = options.scrollHeight - options.clientHeight;
+  if (maxScrollTop <= (options.scrollableThreshold ?? 8)) {
+    return false;
+  }
+
+  return options.scrollTop >= (options.collapseOffset ?? 64);
+}
+
 export function isEditableElement(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -394,6 +474,24 @@ export function isEditableElement(target: EventTarget | null): boolean {
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLSelectElement)
   );
+}
+
+export function markdownToPlainText(markdown?: string): string {
+  return (markdown ?? "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*(\d+)\.\s+/gm, "$1. ")
+    .replace(/[*_~]/g, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
 }
 
 function isWithinMobileScrollRegion(target: EventTarget | null): boolean {
@@ -446,14 +544,7 @@ export function shouldBlurActiveEditableElementOnPointerDown(options: {
 }
 
 function summarizeNotificationBody(markdown?: string): string {
-  const plainText = (markdown ?? "")
-    .replace(/```[\s\S]*?```/g, " code block ")
-    .replace(/`([^`]*)`/g, "$1")
-    .replace(/!\[[^\]]*]\([^)]+\)/g, " ")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[#>*_~-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const plainText = markdownToPlainText(markdown).replace(/\s+/g, " ").trim();
 
   if (!plainText) {
     return "Your latest reply is ready.";

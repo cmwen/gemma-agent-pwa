@@ -18,10 +18,15 @@ import type {
   ScheduledTaskUpdate,
   SessionDeleteMode,
   SessionListState,
+  SpeechCapabilities,
+  SpeechSynthesisRequest,
+  TranscriptionOptions,
+  TranscriptionResult,
 } from "@gemma-agent-pwa/contracts";
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const GEMMA_SKILL_RESULT_EVENT = "gemma-skill-result";
+const SNAPSHOT_FLUSH_INTERVAL_MS = 125;
 
 interface StreamChatCallbacks {
   signal?: AbortSignal;
@@ -57,6 +62,10 @@ export async function getHealth(): Promise<HealthStatus> {
 
 export async function getModels(): Promise<ModelDescriptor[]> {
   return fetchJson<ModelDescriptor[]>(`${API_ROOT}/models`);
+}
+
+export async function getSpeechCapabilities(): Promise<SpeechCapabilities> {
+  return fetchJson<SpeechCapabilities>(`${API_ROOT}/speech/capabilities`);
 }
 
 export async function getAgents(): Promise<AgentSummary[]> {
@@ -171,6 +180,57 @@ export async function restoreSession(
   });
 }
 
+export async function transcribeAudio(
+  audio: Blob,
+  options?: TranscriptionOptions & {
+    filename?: string;
+    signal?: AbortSignal;
+  }
+): Promise<TranscriptionResult> {
+  const body = new FormData();
+  body.append("file", audio, options?.filename ?? "recording.webm");
+  if (options?.language) {
+    body.append("language", options.language);
+  }
+  if (options?.prompt) {
+    body.append("prompt", options.prompt);
+  }
+  if (options?.model) {
+    body.append("model", options.model);
+  }
+  if (typeof options?.temperature === "number") {
+    body.append("temperature", String(options.temperature));
+  }
+  if (options?.responseFormat) {
+    body.append("responseFormat", options.responseFormat);
+  }
+
+  return fetchJsonWithInit<TranscriptionResult>(
+    `${API_ROOT}/speech/transcriptions`,
+    {
+      method: "POST",
+      body,
+      signal: options?.signal,
+    }
+  );
+}
+
+export async function synthesizeSpeech(
+  request: SpeechSynthesisRequest,
+  options?: {
+    signal?: AbortSignal;
+  }
+): Promise<Blob> {
+  return fetchBlobWithInit(`${API_ROOT}/speech/speech`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+    signal: options?.signal,
+  });
+}
+
 export async function streamChat(
   agentId: string,
   request: ChatRequest,
@@ -186,6 +246,9 @@ export async function streamChat(
     threadId,
   });
   const toolCalls = new Map<string, PendingToolCall>();
+  const assistantSnapshotEmitter = createAssistantSnapshotEmitter((event) => {
+    callbacks.onEvent(event);
+  });
   let assistantTextRaw = "";
   let assistantText = "";
   let thinkingText = "";
@@ -215,13 +278,13 @@ export async function streamChat(
       },
       createStreamSubscriber({
         onAssistantSnapshot() {
-          callbacks.onEvent({
-            type: "assistant_snapshot",
+          assistantSnapshotEmitter.queue({
             ...(assistantText ? { assistantText } : {}),
             ...(thinkingText ? { thinkingText } : {}),
           });
         },
         onError(error) {
+          assistantSnapshotEmitter.flush();
           streamError = error;
           callbacks.onEvent({
             type: "error",
@@ -232,6 +295,7 @@ export async function streamChat(
           thinkingText += delta;
         },
         onSkillCall(skillCall) {
+          assistantSnapshotEmitter.flush();
           callbacks.onEvent({
             type: "skill_call",
             skillCallId: skillCall.toolCallId,
@@ -247,6 +311,7 @@ export async function streamChat(
           current.exitCode = meta.exitCode;
         },
         onSkillResult(toolCallId, skillOutput) {
+          assistantSnapshotEmitter.flush();
           const skillCall = toolCalls.get(toolCallId);
           callbacks.onEvent({
             type: "skill_result",
@@ -264,6 +329,7 @@ export async function streamChat(
       })
     );
   } catch (error) {
+    assistantSnapshotEmitter.cancel();
     if (callbacks.signal?.aborted) {
       throw new DOMException("The operation was aborted.", "AbortError");
     }
@@ -283,6 +349,7 @@ export async function streamChat(
     return;
   }
 
+  assistantSnapshotEmitter.flush();
   const assistantTurn = createAssistantTurn({
     agentId,
     assistantText,
@@ -354,6 +421,72 @@ function createStreamSubscriber(options: {
         skillName: event.toolCallName,
         toolCallId: event.toolCallId,
       });
+    },
+  };
+}
+
+function createAssistantSnapshotEmitter(
+  emitEvent: (
+    event: Extract<ChatStreamEvent, { type: "assistant_snapshot" }>
+  ) => void
+): {
+  cancel: () => void;
+  flush: () => void;
+  queue: (
+    snapshot: Omit<
+      Extract<ChatStreamEvent, { type: "assistant_snapshot" }>,
+      "type"
+    >
+  ) => void;
+} {
+  let latestSnapshot:
+    | Omit<Extract<ChatStreamEvent, { type: "assistant_snapshot" }>, "type">
+    | undefined;
+  let lastSnapshotKey = "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const emitLatestSnapshot = () => {
+    timer = undefined;
+    if (
+      !latestSnapshot ||
+      (!latestSnapshot.assistantText && !latestSnapshot.thinkingText)
+    ) {
+      latestSnapshot = undefined;
+      return;
+    }
+    const nextSnapshot = latestSnapshot;
+    latestSnapshot = undefined;
+    const nextSnapshotKey = JSON.stringify(nextSnapshot);
+    if (nextSnapshotKey === lastSnapshotKey) {
+      return;
+    }
+    lastSnapshotKey = nextSnapshotKey;
+    emitEvent({
+      type: "assistant_snapshot",
+      ...nextSnapshot,
+    });
+  };
+
+  return {
+    cancel() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      latestSnapshot = undefined;
+    },
+    flush() {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      emitLatestSnapshot();
+    },
+    queue(snapshot) {
+      latestSnapshot = snapshot;
+      if (timer) {
+        return;
+      }
+      timer = setTimeout(emitLatestSnapshot, SNAPSHOT_FLUSH_INTERVAL_MS);
     },
   };
 }
@@ -555,6 +688,17 @@ async function fetchOk(url: string, init?: RequestInit): Promise<void> {
   }
 }
 
+async function fetchBlobWithInit(
+  url: string,
+  init?: RequestInit
+): Promise<Blob> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(await getResponseErrorMessage(response, "Request failed"));
+  }
+  return response.blob();
+}
+
 async function getResponseErrorMessage(
   response: Response,
   fallbackMessage: string
@@ -610,12 +754,14 @@ function payloadMessage(
 
 export const __testing = {
   buildRunAgentMessages,
+  createAssistantSnapshotEmitter,
   createCompletedThread,
   createOptimisticThread,
   getResponseErrorMessage,
   parseGemmaSkillResultMeta,
   parseJsonRecord,
   payloadMessage,
+  SNAPSHOT_FLUSH_INTERVAL_MS,
   sanitizeVisibleAssistantText,
   summarizeAssistantText,
 };

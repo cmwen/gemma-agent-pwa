@@ -8,6 +8,12 @@ interface SpeechHealthStatus {
   issue?: string;
 }
 
+interface SpeechForwardedError {
+  message: string;
+  status: number;
+  statusText: string;
+}
+
 interface ErrorRecord extends Record<string, unknown> {
   cause?: unknown;
 }
@@ -45,18 +51,18 @@ export async function forwardSpeechUpstreamError(
   actionLabel: string,
   baseUrl: string
 ): Promise<Response> {
-  const errorMessage = await readSpeechUpstreamError(
+  const forwardedError = await readSpeechUpstreamError(
     response,
     actionLabel,
     baseUrl
   );
 
-  return new Response(JSON.stringify({ error: errorMessage }), {
+  return new Response(JSON.stringify({ error: forwardedError.message }), {
     headers: {
       "content-type": "application/json",
     },
-    status: response.status,
-    statusText: response.statusText,
+    status: forwardedError.status,
+    statusText: forwardedError.statusText,
   });
 }
 
@@ -67,12 +73,13 @@ export async function getSpeechHealthStatus(
   try {
     const response = await fetchImpl(`${baseUrl}/health`);
     if (!response.ok) {
+      const issue = await readSpeechUpstreamError(
+        response,
+        "Speech is unavailable",
+        baseUrl
+      );
       return {
-        issue: await readSpeechUpstreamError(
-          response,
-          "Speech is unavailable",
-          baseUrl
-        ),
+        issue: issue.message,
       };
     }
     const health = speechHealthSchema.parse(await response.json());
@@ -101,24 +108,67 @@ async function readSpeechUpstreamError(
   response: Response,
   actionLabel: string,
   baseUrl: string
-): Promise<string> {
+): Promise<SpeechForwardedError> {
   const responseText = (await response.text()).trim();
   if (responseText && isJsonResponse(response)) {
     const payload = parseJsonRecord(responseText);
     const message = readSpeechPayloadMessage(payload);
     if (message) {
-      return message;
+      return normalizeSpeechUpstreamError(
+        response,
+        actionLabel,
+        baseUrl,
+        message
+      );
     }
   }
 
   if (responseText) {
-    return responseText;
+    return normalizeSpeechUpstreamError(
+      response,
+      actionLabel,
+      baseUrl,
+      responseText
+    );
   }
 
   const statusDetail = [response.status, response.statusText]
     .filter(Boolean)
     .join(" ");
-  return `${actionLabel} because min-speech-service at ${baseUrl} returned ${statusDetail || "an error response"}.`;
+  return {
+    message: `${actionLabel} because min-speech-service at ${baseUrl} returned ${statusDetail || "an error response"}.`,
+    status: response.status,
+    statusText: response.statusText,
+  };
+}
+
+function normalizeSpeechUpstreamError(
+  response: Response,
+  actionLabel: string,
+  baseUrl: string,
+  message: string
+): SpeechForwardedError {
+  const opaqueUpstreamStatus = readOpaqueUpstreamStatusCode(message);
+  if (response.status >= 500 && opaqueUpstreamStatus) {
+    return {
+      message: `${actionLabel} because min-speech-service at ${baseUrl} could not complete the request with its configured speech backend (upstream returned ${opaqueUpstreamStatus} with no body). Check the configured speech backend route/model, or update min-speech-service.`,
+      status: 502,
+      statusText: "Bad Gateway",
+    };
+  }
+
+  return {
+    message,
+    status: response.status,
+    statusText: response.statusText,
+  };
+}
+
+function readOpaqueUpstreamStatusCode(
+  responseText: string
+): string | undefined {
+  const match = responseText.match(/^(\d{3}) status code \(no body\)$/i);
+  return match?.[1];
 }
 
 function getSpeechTransportDetail(error: unknown): string | undefined {

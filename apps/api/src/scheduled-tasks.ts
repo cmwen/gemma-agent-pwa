@@ -30,12 +30,16 @@ import { runChatLoop } from "./chat-loop.js";
 import { listLmStudioModels } from "./lmstudio.js";
 
 const RUN_HISTORY_LIMIT = 20;
-const SCHEDULER_INTERVAL_MS = 30_000;
+const SCHEDULER_MIN_INTERVAL_MS = 30_000;
+const SCHEDULER_MAX_INTERVAL_MS = 3_600_000;
 const NEXT_RUN_SEARCH_MINUTES = 8 * 24 * 60;
 
 export function registerScheduledTaskRoutes(
   app: Hono,
-  workspace: MinKbWorkspace
+  workspace: MinKbWorkspace,
+  options: {
+    onScheduleMutation?: () => void;
+  } = {}
 ): void {
   app.get("/api/schedules", async (context) => {
     return context.json(await listScheduledTasks(workspace));
@@ -58,6 +62,7 @@ export function registerScheduledTaskRoutes(
       agentId,
     });
     await upsertScheduledTask(workspace, task);
+    options.onScheduleMutation?.();
     return context.json(task, 201);
   });
 
@@ -74,6 +79,7 @@ export function registerScheduledTaskRoutes(
     );
     const task = applyScheduledTaskUpdate(existing, input);
     await upsertScheduledTask(workspace, task);
+    options.onScheduleMutation?.();
     return context.json(task);
   });
 
@@ -85,6 +91,7 @@ export function registerScheduledTaskRoutes(
       agentId,
       context.req.param("taskId")
     );
+    options.onScheduleMutation?.();
     return context.body(null, 204);
   });
 
@@ -102,6 +109,7 @@ export function registerScheduledTaskRoutes(
     const updatedTask = await runScheduledTask(workspace, task, {
       trigger: "manual",
     });
+    options.onScheduleMutation?.();
     return context.json(updatedTask);
   });
 }
@@ -110,40 +118,86 @@ export function startScheduledTaskRunner(options: {
   workspace: MinKbWorkspace;
   intervalMs?: number;
   now?: () => Date;
-}): () => void {
-  const intervalMs = options.intervalMs ?? SCHEDULER_INTERVAL_MS;
+}): {
+  refresh: () => void;
+  stop: () => void;
+} {
+  const minimumIntervalMs = options.intervalMs ?? SCHEDULER_MIN_INTERVAL_MS;
   let running = false;
+  let stopped = false;
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  let refreshRequested = false;
+
+  const clearScheduledTick = () => {
+    if (handle) {
+      clearTimeout(handle);
+      handle = undefined;
+    }
+  };
+
+  const scheduleNextTick = (delayMs: number) => {
+    if (stopped) {
+      return;
+    }
+    clearScheduledTick();
+    handle = setTimeout(() => {
+      handle = undefined;
+      void tick();
+    }, delayMs);
+  };
 
   const tick = async () => {
-    if (running) {
+    if (running || stopped) {
       return;
     }
     running = true;
+    refreshRequested = false;
+    let nextDelayMs = minimumIntervalMs;
     try {
-      const now = options.now?.() ?? new Date();
+      let now = options.now?.() ?? new Date();
       const tasks = await listScheduledTasks(options.workspace);
-      for (const task of tasks) {
+      const nextTasks = [...tasks];
+      for (const [index, task] of tasks.entries()) {
         if (!isTaskDue(task, now)) {
           continue;
         }
-        await runScheduledTask(options.workspace, task, {
+        nextTasks[index] = await runScheduledTask(options.workspace, task, {
           now,
           trigger:
             now.getTime() - new Date(task.nextRunAt).getTime() > 60_000
               ? "catch-up"
               : "schedule",
         });
+        now = options.now?.() ?? new Date();
       }
+      nextDelayMs = getSchedulerDelayMs(nextTasks, now, minimumIntervalMs);
+    } catch (error) {
+      console.error("Scheduled task runner tick failed.", error);
     } finally {
       running = false;
+      scheduleNextTick(refreshRequested ? 0 : nextDelayMs);
     }
   };
 
+  const refresh = () => {
+    if (stopped) {
+      return;
+    }
+    if (running) {
+      refreshRequested = true;
+      return;
+    }
+    scheduleNextTick(0);
+  };
+
   void tick();
-  const handle = setInterval(() => {
-    void tick();
-  }, intervalMs);
-  return () => clearInterval(handle);
+  return {
+    refresh,
+    stop: () => {
+      stopped = true;
+      clearScheduledTick();
+    },
+  };
 }
 
 export function buildScheduledTask(input: ScheduledTaskCreate): ScheduledTask {
@@ -304,6 +358,32 @@ function isTaskDue(task: ScheduledTask, now: Date): boolean {
     task.enabled &&
     !task.runningAt &&
     new Date(task.nextRunAt).getTime() <= now.getTime()
+  );
+}
+
+function getSchedulerDelayMs(
+  tasks: ScheduledTask[],
+  now: Date,
+  minimumIntervalMs: number
+): number {
+  const enabledTasks = tasks.filter((task) => task.enabled && !task.runningAt);
+  if (enabledTasks.length === 0) {
+    return SCHEDULER_MAX_INTERVAL_MS;
+  }
+
+  const nextDueAtMs = Math.min(
+    ...enabledTasks.map((task) => new Date(task.nextRunAt).getTime())
+  );
+  return clampSchedulerDelayMs(nextDueAtMs - now.getTime(), minimumIntervalMs);
+}
+
+function clampSchedulerDelayMs(
+  delayMs: number,
+  minimumIntervalMs: number
+): number {
+  return Math.min(
+    SCHEDULER_MAX_INTERVAL_MS,
+    Math.max(minimumIntervalMs, delayMs)
   );
 }
 
@@ -522,6 +602,7 @@ export const __testing = {
   ceilToNextMinute,
   computeNextScheduledRun,
   getTimeZoneParts,
+  getSchedulerDelayMs,
   isTaskDue,
   matchesSchedule,
   parseWeekday,

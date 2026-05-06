@@ -10,6 +10,8 @@ interface AppStore {
   themeMode: ThemeMode;
   modelDetailsOpen: boolean;
   notificationsEnabled: boolean;
+  autoPlayReplies: boolean;
+  handsFreeVoiceTurns: boolean;
   setSelectedAgentId: (agentId?: string) => void;
   setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
   setLastScheduledRunNotification: (scheduleId: string, runId: string) => void;
@@ -17,6 +19,35 @@ interface AppStore {
   setThemeMode: (themeMode: ThemeMode) => void;
   setModelDetailsOpen: (modelDetailsOpen: boolean) => void;
   setNotificationsEnabled: (notificationsEnabled: boolean) => void;
+  setAutoPlayReplies: (autoPlayReplies: boolean) => void;
+  setHandsFreeVoiceTurns: (handsFreeVoiceTurns: boolean) => void;
+}
+
+type PersistedAppStoreState = Pick<
+  AppStore,
+  | "lastScheduledRunNotifications"
+  | "autoPlayReplies"
+  | "handsFreeVoiceTurns"
+  | "modelDetailsOpen"
+  | "notificationsEnabled"
+  | "selectedAgentId"
+  | "selectedSessionIds"
+  | "themeMode"
+>;
+
+export function partializeAppStoreState(
+  state: AppStore
+): PersistedAppStoreState {
+  return {
+    selectedAgentId: state.selectedAgentId,
+    selectedSessionIds: state.selectedSessionIds,
+    lastScheduledRunNotifications: state.lastScheduledRunNotifications,
+    themeMode: state.themeMode,
+    modelDetailsOpen: state.modelDetailsOpen,
+    notificationsEnabled: state.notificationsEnabled,
+    autoPlayReplies: state.autoPlayReplies,
+    handsFreeVoiceTurns: state.handsFreeVoiceTurns,
+  };
 }
 
 export const useAppStore = create<AppStore>()(
@@ -29,6 +60,8 @@ export const useAppStore = create<AppStore>()(
       themeMode: getPreferredTheme(),
       modelDetailsOpen: false,
       notificationsEnabled: false,
+      autoPlayReplies: true,
+      handsFreeVoiceTurns: true,
       setSelectedAgentId: (agentId) => set({ selectedAgentId: agentId }),
       setSelectedSessionId: (agentId, sessionId) =>
         set((state) => ({
@@ -55,9 +88,13 @@ export const useAppStore = create<AppStore>()(
       setModelDetailsOpen: (modelDetailsOpen) => set({ modelDetailsOpen }),
       setNotificationsEnabled: (notificationsEnabled) =>
         set({ notificationsEnabled }),
+      setAutoPlayReplies: (autoPlayReplies) => set({ autoPlayReplies }),
+      setHandsFreeVoiceTurns: (handsFreeVoiceTurns) =>
+        set({ handsFreeVoiceTurns }),
     }),
     {
       name: "gemma-agent-pwa-state",
+      partialize: partializeAppStoreState,
     }
   )
 );

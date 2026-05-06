@@ -16,12 +16,21 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
 const DEFAULT_LOCALHOST_BASE_URL = "http://localhost:1234/v1";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
+const MODEL_CATALOG_SUCCESS_CACHE_TTL_MS = 30_000;
+const MODEL_CATALOG_FAILURE_CACHE_TTL_MS = 5 * 60_000;
 const THINKING_BLOCK_PATTERNS = [
   /^\s*<think>\s*([\s\S]*?)\s*<\/think>\s*/i,
   /^\s*<thinking>\s*([\s\S]*?)\s*<\/thinking>\s*/i,
   /^\s*<reasoning>\s*([\s\S]*?)\s*<\/reasoning>\s*/i,
 ];
 let preferredBaseUrl: string | undefined;
+let cachedModelCatalog:
+  | {
+      expiresAt: number;
+      value: LmStudioModelCatalog;
+    }
+  | undefined;
+let pendingModelCatalogRequest: Promise<LmStudioModelCatalog> | undefined;
 
 interface LmStudioChatCompletionResponse {
   id?: string;
@@ -86,43 +95,72 @@ export async function listLmStudioModels(): Promise<ModelDescriptor[]> {
 }
 
 export async function getLmStudioModelCatalog(): Promise<LmStudioModelCatalog> {
-  try {
-    const response = await fetchLmStudio(
-      "/models",
-      undefined,
-      DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
-      "LM Studio model discovery"
-    );
-    if (!response.ok) {
-      throw new Error(
-        `LM Studio returned ${response.status} while listing models.`
+  const now = Date.now();
+  if (cachedModelCatalog && cachedModelCatalog.expiresAt > now) {
+    return cachedModelCatalog.value;
+  }
+
+  if (pendingModelCatalogRequest) {
+    return pendingModelCatalogRequest;
+  }
+
+  const request = (async (): Promise<LmStudioModelCatalog> => {
+    try {
+      const response = await fetchLmStudio(
+        "/models",
+        undefined,
+        DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS,
+        "LM Studio model discovery"
       );
+      if (!response.ok) {
+        throw new Error(
+          `LM Studio returned ${response.status} while listing models.`
+        );
+      }
+      const payload = (await response.json()) as {
+        data?: Array<{ id?: string; owned_by?: string }>;
+      };
+      return (payload.data ?? [])
+        .filter((item): item is { id: string; owned_by?: string } =>
+          Boolean(item.id)
+        )
+        .map((item) => ({
+          id: item.id,
+          displayName: item.id,
+          provider: item.owned_by ?? "LM Studio",
+          isGemma: /gemma/i.test(item.id),
+        }))
+        .reduce<LmStudioModelCatalog>(
+          (catalog, model) => {
+            catalog.models.push(model);
+            return catalog;
+          },
+          { models: [], reachable: true }
+        );
+    } catch {
+      return {
+        models: getConfiguredModelDescriptors(),
+        reachable: false,
+      };
     }
-    const payload = (await response.json()) as {
-      data?: Array<{ id?: string; owned_by?: string }>;
+  })();
+
+  pendingModelCatalogRequest = request;
+  try {
+    const catalog = await request;
+    cachedModelCatalog = {
+      expiresAt:
+        Date.now() +
+        (catalog.reachable
+          ? MODEL_CATALOG_SUCCESS_CACHE_TTL_MS
+          : MODEL_CATALOG_FAILURE_CACHE_TTL_MS),
+      value: catalog,
     };
-    return (payload.data ?? [])
-      .filter((item): item is { id: string; owned_by?: string } =>
-        Boolean(item.id)
-      )
-      .map((item) => ({
-        id: item.id,
-        displayName: item.id,
-        provider: item.owned_by ?? "LM Studio",
-        isGemma: /gemma/i.test(item.id),
-      }))
-      .reduce<LmStudioModelCatalog>(
-        (catalog, model) => {
-          catalog.models.push(model);
-          return catalog;
-        },
-        { models: [], reachable: true }
-      );
-  } catch {
-    return {
-      models: getConfiguredModelDescriptors(),
-      reachable: false,
-    };
+    return catalog;
+  } finally {
+    if (pendingModelCatalogRequest === request) {
+      pendingModelCatalogRequest = undefined;
+    }
   }
 }
 
@@ -919,6 +957,10 @@ export const __testing = {
   buildMessages,
   buildSystemPrompt,
   combineTextCandidates,
+  clearLmStudioModelCatalogCache() {
+    cachedModelCatalog = undefined;
+    pendingModelCatalogRequest = undefined;
+  },
   dedupeUrls,
   estimateTokens,
   extractNextStreamBlock,

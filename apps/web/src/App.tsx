@@ -56,6 +56,7 @@ import {
   markdownToPlainText,
   type StreamSkillActivity,
   shouldBlurActiveEditableElementOnPointerDown,
+  shouldCollapseMobileChatHeader,
   shouldSendCompletionNotification,
 } from "./app-utils";
 import {
@@ -145,6 +146,7 @@ const MIN_CHAT_PANEL_WIDTH = 420;
 const RESIZE_STEP = 24;
 const HEALTH_QUERY_STALE_TIME_MS = 30_000;
 const MODELS_QUERY_STALE_TIME_MS = 5 * 60_000;
+const MOBILE_CHAT_HEADER_COLLAPSE_OFFSET_PX = 64;
 const SPEECH_QUERY_STALE_TIME_MS = 5 * 60_000;
 const SPEECH_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const SPEECH_SYNTHESIS_TIMEOUT_MS = 30_000;
@@ -237,6 +239,8 @@ export default function App() {
   const [isDocumentHidden, setDocumentHidden] = useState(
     typeof document === "undefined" ? false : document.hidden
   );
+  const [isMobileChatHeaderCollapsed, setIsMobileChatHeaderCollapsed] =
+    useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraftState>(
     createScheduleDraftState()
   );
@@ -260,6 +264,7 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
+  const suppressMobileTimelineScrollSyncRef = useRef(false);
   const newChatButtonRef = useRef<HTMLButtonElement | null>(null);
   const recentHistoryButtonRef = useRef<HTMLButtonElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -515,14 +520,17 @@ export default function App() {
     };
     const sourceChanged =
       runtimeConfigSourceKeyRef.current !== runtimeConfigSourceKey;
+    const hasActiveLiveThread =
+      Boolean(activeSessionId) && liveThread?.sessionId === activeSessionId;
 
     runtimeConfigSourceKeyRef.current = runtimeConfigSourceKey;
     if (sourceChanged) {
       forceAutoScrollTimelineRef.current = true;
       timelineMetricsRef.current = undefined;
       setRuntimeConfigDirty(false);
-      setLiveThread(undefined);
-      setStreaming({ sending: false, skillActivities: [] });
+      if (!hasActiveLiveThread) {
+        setStreaming({ sending: false, skillActivities: [] });
+      }
     }
 
     if (runtimeConfigDirty && !sourceChanged) {
@@ -531,8 +539,10 @@ export default function App() {
 
     setRuntimeConfig(nextRuntimeConfig);
   }, [
+    activeSessionId,
     agentDetailQuery.data,
     healthQuery.data?.defaultModel,
+    liveThread?.sessionId,
     modelsQuery.data,
     runtimeConfigDirty,
     runtimeConfigSourceKey,
@@ -673,6 +683,27 @@ export default function App() {
     },
     [modelDetailsOpen, setModelDetailsOpen]
   );
+
+  const syncMobileChatHeaderCollapsed = useCallback(() => {
+    const timeline = timelineRef.current;
+    if (
+      !timeline ||
+      typeof window === "undefined" ||
+      window.innerWidth >= DESKTOP_BREAKPOINT
+    ) {
+      setIsMobileChatHeaderCollapsed(false);
+      return;
+    }
+
+    setIsMobileChatHeaderCollapsed(
+      shouldCollapseMobileChatHeader({
+        clientHeight: timeline.clientHeight,
+        collapseOffset: MOBILE_CHAT_HEADER_COLLAPSE_OFFSET_PX,
+        scrollHeight: timeline.scrollHeight,
+        scrollTop: timeline.scrollTop,
+      })
+    );
+  }, []);
 
   const stopSpeechPlayback = useCallback(() => {
     playbackAbortRef.current?.abort();
@@ -1273,7 +1304,11 @@ export default function App() {
       });
 
     if (shouldFollowLatest) {
+      suppressMobileTimelineScrollSyncRef.current = true;
       timeline.scrollTop = timeline.scrollHeight;
+      setIsMobileChatHeaderCollapsed(false);
+    } else {
+      syncMobileChatHeaderCollapsed();
     }
 
     forceAutoScrollTimelineRef.current = false;
@@ -1281,7 +1316,31 @@ export default function App() {
       clientHeight: timeline.clientHeight,
       scrollHeight: timeline.scrollHeight,
     };
-  }, [timelineSyncKey]);
+  }, [syncMobileChatHeaderCollapsed, timelineSyncKey]);
+
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+
+    function handleTimelineScroll() {
+      if (suppressMobileTimelineScrollSyncRef.current) {
+        suppressMobileTimelineScrollSyncRef.current = false;
+        return;
+      }
+      syncMobileChatHeaderCollapsed();
+    }
+
+    timeline.addEventListener("scroll", handleTimelineScroll, {
+      passive: true,
+    });
+    window.addEventListener("resize", syncMobileChatHeaderCollapsed);
+    return () => {
+      timeline.removeEventListener("scroll", handleTimelineScroll);
+      window.removeEventListener("resize", syncMobileChatHeaderCollapsed);
+    };
+  }, [syncMobileChatHeaderCollapsed]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -2622,7 +2681,11 @@ export default function App() {
         )}
         id="app-section-chat"
       >
-        <header className="chat-header">
+        <header
+          className={`chat-header ${
+            isMobileChatHeaderCollapsed ? "chat-header-mobile-collapsed" : ""
+          }`}
+        >
           <div>
             <p className="eyebrow">Local Gemma chat</p>
             <h2>

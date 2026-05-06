@@ -398,6 +398,27 @@ const server = createServer(async (request, response) => {
         messageId: "reasoning-1",
       });
     }
+    const assistantMarkdown = [
+      `Streaming reply for ${model}`,
+      "",
+      `- thinking: ${thinkingEnabled ? "on" : "off"}`,
+      `- tokens: ${maxTokens}`,
+      "- mobile: wrapped",
+      "",
+      "| Area | Status |",
+      "| --- | --- |",
+      "| Streaming | Ready |",
+      "| Layout | Mobile friendly |",
+      "",
+      "```ts",
+      "export function wrapInsideCard(url: string) {",
+      "  return url.split('/').join('/\\n');",
+      "}",
+      "```",
+      "",
+      "`https://example.com/really/long/mobile/path/that/should/wrap/inside/the/chat/card/without/overflow`",
+    ].join("\n");
+
     writeEvent(response, encoder, {
       type: EventType.TEXT_MESSAGE_START,
       messageId: "assistant-1",
@@ -424,17 +445,10 @@ const server = createServer(async (request, response) => {
       messageId: "assistant-1",
     });
     await delay(120);
-
-    const assistantTurn = {
-      messageId: "turn-assistant-1",
-      sender: "assistant" as const,
-      createdAt: new Date().toISOString(),
-      bodyMarkdown: [
-        `Streaming reply for ${model}`,
+    writeEvent(response, encoder, {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      delta: [
         "",
-        `- thinking: ${thinkingEnabled ? "on" : "off"}`,
-        `- tokens: ${maxTokens}`,
-        "- mobile: wrapped",
         "",
         "| Area | Status |",
         "| --- | --- |",
@@ -449,6 +463,15 @@ const server = createServer(async (request, response) => {
         "",
         "`https://example.com/really/long/mobile/path/that/should/wrap/inside/the/chat/card/without/overflow`",
       ].join("\n"),
+      messageId: "assistant-1",
+    });
+    await delay(120);
+
+    const assistantTurn = {
+      messageId: "turn-assistant-1",
+      sender: "assistant" as const,
+      createdAt: new Date().toISOString(),
+      bodyMarkdown: assistantMarkdown,
       thinkingMarkdown: thinkingEnabled
         ? "Compare the mobile layout before shipping.\nThen confirm the streamed text stays readable."
         : undefined,

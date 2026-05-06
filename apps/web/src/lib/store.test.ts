@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getSelectedSessionId,
   hasStoredSessionSelection,
+  partializeAppStoreState,
   useAppStore,
 } from "./store";
 
@@ -15,6 +16,8 @@ beforeEach(() => {
     themeMode: "dark",
     modelDetailsOpen: false,
     notificationsEnabled: false,
+    autoPlayReplies: true,
+    handsFreeVoiceTurns: true,
   });
 });
 
@@ -68,6 +71,50 @@ describe("notification preference", () => {
 
     expect(useAppStore.getState().lastScheduledRunNotifications).toEqual({
       "schedule-1": "run-1",
+    });
+  });
+});
+
+describe("speech preferences", () => {
+  it("starts with hands-free voice turns enabled", () => {
+    expect(useAppStore.getState().handsFreeVoiceTurns).toBe(true);
+  });
+
+  it("persists speech playback and hands-free toggles", () => {
+    useAppStore.getState().setAutoPlayReplies(false);
+    useAppStore.getState().setHandsFreeVoiceTurns(false);
+
+    expect(useAppStore.getState().autoPlayReplies).toBe(false);
+    expect(useAppStore.getState().handsFreeVoiceTurns).toBe(false);
+  });
+});
+
+describe("persisted app state", () => {
+  it("omits volatile drafts from persisted storage", () => {
+    expect(
+      partializeAppStoreState({
+        ...useAppStore.getState(),
+        drafts: {
+          "agent-1:new": "Draft that should stay in memory only.",
+        },
+        selectedAgentId: "agent-1",
+        selectedSessionIds: { "agent-1": "session-1" },
+        lastScheduledRunNotifications: { "schedule-1": "run-1" },
+        themeMode: "light",
+        modelDetailsOpen: true,
+        notificationsEnabled: true,
+        autoPlayReplies: false,
+        handsFreeVoiceTurns: false,
+      })
+    ).toEqual({
+      selectedAgentId: "agent-1",
+      selectedSessionIds: { "agent-1": "session-1" },
+      lastScheduledRunNotifications: { "schedule-1": "run-1" },
+      themeMode: "light",
+      modelDetailsOpen: true,
+      notificationsEnabled: true,
+      autoPlayReplies: false,
+      handsFreeVoiceTurns: false,
     });
   });
 });

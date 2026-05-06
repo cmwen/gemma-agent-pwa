@@ -673,10 +673,23 @@ kbd {
   font-size: 0.86rem;
 }
 
+.message-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
 .message-header strong,
 .message-header span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.message-audio-button {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
 }
 
 .message-card p {
@@ -837,6 +850,48 @@ kbd {
 
 .composer > .hint-list {
   pointer-events: none;
+}
+
+.voice-toolbar,
+.voice-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.voice-toolbar {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--surface-border-soft);
+  border-radius: 1rem;
+  background: var(--panel-bg-soft);
+}
+
+.voice-toolbar-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.voice-toolbar-hint {
+  margin: 0;
+  max-width: 44rem;
+}
+
+.voice-toolbar-status {
+  margin-top: 0;
+}
+
+.voice-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.voice-toggle.is-active {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--accent-soft);
 }
 
 .composer-input {
@@ -1412,25 +1467,24 @@ kbd {
     max-height: 24rem;
     overflow: hidden;
     background: var(--panel-bg-strong);
+    transform-origin: top;
+    transition:
+      max-height 180ms ease,
+      padding 180ms ease,
+      border-bottom-color 180ms ease,
+      opacity 180ms ease,
+      transform 180ms ease;
+    will-change: max-height, padding, border-color, opacity, transform;
   }
 
-  @supports (animation-timeline: scroll()) {
-    .chat-panel {
-      timeline-scope: --chat-header-scroll;
-    }
-
-    .chat-panel .timeline {
-      scroll-timeline-name: --chat-header-scroll;
-      scroll-timeline-axis: block;
-    }
-
-    .chat-header {
-      animation: chat-header-scrollaway linear both;
-      animation-timeline: --chat-header-scroll;
-      animation-range: 0 6rem;
-      transform-origin: top;
-      will-change: max-height, padding, border-color, opacity, transform;
-    }
+  .chat-header-mobile-collapsed {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-color: transparent;
+    opacity: 0;
+    transform: translateY(-0.5rem);
+    pointer-events: none;
   }
 
   .command-trigger {
@@ -1543,6 +1597,11 @@ kbd {
   .message-card {
     max-width: 100%;
     padding: 0.9rem;
+  }
+
+  .timeline {
+    padding-bottom: calc(16rem + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: 16rem;
   }
 
   .message-header {

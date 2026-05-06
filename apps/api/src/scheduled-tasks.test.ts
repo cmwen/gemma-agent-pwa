@@ -47,6 +47,67 @@ describe("scheduled task timing helpers", () => {
       )
     ).toBe("2026-05-04T08:45:00.000Z");
   });
+
+  it("sleeps longer when no schedule is close to due", () => {
+    expect(
+      __testing.getSchedulerDelayMs(
+        [],
+        new Date("2026-05-03T10:15:12.000Z"),
+        30_000
+      )
+    ).toBe(3_600_000);
+
+    expect(
+      __testing.getSchedulerDelayMs(
+        [
+          {
+            id: "task-1",
+            agentId: "release-planner",
+            title: "Daily digest",
+            prompt: "Summarize the latest activity.",
+            recurrence: "daily",
+            minuteOfHour: 15,
+            hourOfDay: 9,
+            timezone: "UTC",
+            enabled: true,
+            notifyOnCompletion: true,
+            sessionMode: "dedicated",
+            createdAt: "2026-05-01T00:00:00.000Z",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+            nextRunAt: "2026-05-03T13:15:00.000Z",
+            recentRuns: [],
+          },
+        ],
+        new Date("2026-05-03T10:15:12.000Z"),
+        30_000
+      )
+    ).toBe(3_600_000);
+
+    expect(
+      __testing.getSchedulerDelayMs(
+        [
+          {
+            id: "task-2",
+            agentId: "release-planner",
+            title: "Quick check",
+            prompt: "Check status.",
+            recurrence: "hourly",
+            minuteOfHour: 30,
+            timezone: "UTC",
+            enabled: true,
+            notifyOnCompletion: false,
+            sessionMode: "fresh",
+            createdAt: "2026-05-01T00:00:00.000Z",
+            updatedAt: "2026-05-01T00:00:00.000Z",
+            nextRunAt: "2026-05-03T10:20:00.000Z",
+            recentRuns: [],
+          },
+        ],
+        new Date("2026-05-03T10:15:12.000Z"),
+        30_000
+      )
+    ).toBe(288_000);
+  });
 });
 
 describe("scheduled task update helpers", () => {

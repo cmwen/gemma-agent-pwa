@@ -51,6 +51,49 @@ describe("speech error helpers", () => {
     });
   });
 
+  it("maps opaque upstream status errors to a gateway failure", async () => {
+    const forwarded = await forwardSpeechUpstreamError(
+      new Response("404 status code (no body)", {
+        status: 500,
+        headers: {
+          "content-type": "text/plain",
+        },
+      }),
+      "Speech synthesis failed",
+      "http://127.0.0.1:8790"
+    );
+
+    expect(forwarded.status).toBe(502);
+    await expect(forwarded.json()).resolves.toEqual({
+      error:
+        "Speech synthesis failed because min-speech-service at http://127.0.0.1:8790 could not complete the request with its configured speech backend (upstream returned 404 with no body). Check the configured speech backend route/model, or update min-speech-service.",
+    });
+  });
+
+  it("maps opaque upstream JSON errors to a gateway failure", async () => {
+    const forwarded = await forwardSpeechUpstreamError(
+      new Response(
+        JSON.stringify({
+          error: "404 status code (no body)",
+        }),
+        {
+          status: 500,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      ),
+      "Speech synthesis failed",
+      "http://127.0.0.1:8790"
+    );
+
+    expect(forwarded.status).toBe(502);
+    await expect(forwarded.json()).resolves.toEqual({
+      error:
+        "Speech synthesis failed because min-speech-service at http://127.0.0.1:8790 could not complete the request with its configured speech backend (upstream returned 404 with no body). Check the configured speech backend route/model, or update min-speech-service.",
+    });
+  });
+
   it("returns a structured 503 response for local transport errors", async () => {
     const response = createSpeechFetchFailureResponse(
       "Speech transcription failed",

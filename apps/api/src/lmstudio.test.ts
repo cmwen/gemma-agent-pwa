@@ -12,6 +12,8 @@ const originalLmStudioBaseUrl = process.env.LM_STUDIO_BASE_URL;
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  __testing.clearLmStudioModelCatalogCache();
   if (originalLmStudioModel === undefined) {
     delete process.env.LM_STUDIO_MODEL;
   } else {
@@ -282,6 +284,129 @@ describe("LM Studio model catalog", () => {
       reachable: true,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses the in-flight model discovery request", async () => {
+    let resolveResponse: ((value: Response) => void) | undefined;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveResponse = resolve;
+        })
+    );
+
+    const firstCatalog = getLmStudioModelCatalog();
+    const secondCatalog = getLmStudioModelCatalog();
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    resolveResponse?.(
+      new Response(
+        JSON.stringify({
+          data: [{ id: "google/gemma-3-4b", owned_by: "LM Studio" }],
+        })
+      )
+    );
+
+    await expect(Promise.all([firstCatalog, secondCatalog])).resolves.toEqual([
+      {
+        models: [
+          {
+            id: "google/gemma-3-4b",
+            displayName: "google/gemma-3-4b",
+            provider: "LM Studio",
+            isGemma: true,
+          },
+        ],
+        reachable: true,
+      },
+      {
+        models: [
+          {
+            id: "google/gemma-3-4b",
+            displayName: "google/gemma-3-4b",
+            provider: "LM Studio",
+            isGemma: true,
+          },
+        ],
+        reachable: true,
+      },
+    ]);
+  });
+
+  it("serves recent model catalogs from cache", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-05T10:00:00.000Z"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [{ id: "google/gemma-3-4b", owned_by: "LM Studio" }],
+        })
+      )
+    );
+
+    await expect(getLmStudioModelCatalog()).resolves.toEqual({
+      models: [
+        {
+          id: "google/gemma-3-4b",
+          displayName: "google/gemma-3-4b",
+          provider: "LM Studio",
+          isGemma: true,
+        },
+      ],
+      reachable: true,
+    });
+    vi.setSystemTime(new Date("2026-05-05T10:00:20.000Z"));
+    await expect(getLmStudioModelCatalog()).resolves.toEqual({
+      models: [
+        {
+          id: "google/gemma-3-4b",
+          displayName: "google/gemma-3-4b",
+          provider: "LM Studio",
+          isGemma: true,
+        },
+      ],
+      reachable: true,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("backs off repeated failed model discovery attempts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-05T10:00:00.000Z"));
+    process.env.LM_STUDIO_MODEL = "google/gemma-3-4b";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("connect ECONNREFUSED"));
+
+    await expect(getLmStudioModelCatalog()).resolves.toEqual({
+      models: [
+        {
+          id: "google/gemma-3-4b",
+          displayName: "google/gemma-3-4b",
+          provider: "LM Studio",
+          isGemma: true,
+        },
+      ],
+      reachable: false,
+    });
+    const fetchCallsAfterInitialFailure = fetchSpy.mock.calls.length;
+    vi.setSystemTime(new Date("2026-05-05T10:04:00.000Z"));
+    await expect(getLmStudioModelCatalog()).resolves.toEqual({
+      models: [
+        {
+          id: "google/gemma-3-4b",
+          displayName: "google/gemma-3-4b",
+          provider: "LM Studio",
+          isGemma: true,
+        },
+      ],
+      reachable: false,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(fetchCallsAfterInitialFailure);
+    vi.useRealTimers();
   });
 });
 
