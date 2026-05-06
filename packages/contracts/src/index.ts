@@ -379,6 +379,81 @@ export const modelDescriptorSchema = z.object({
 });
 export type ModelDescriptor = z.infer<typeof modelDescriptorSchema>;
 
+export const speechAudioFormatSchema = z.enum(["mp3", "wav", "flac", "pcm"]);
+export type SpeechAudioFormat = z.infer<typeof speechAudioFormatSchema>;
+
+export const transcriptionResponseFormatSchema = z.enum([
+  "text",
+  "json",
+  "verbose_json",
+  "srt",
+  "vtt",
+]);
+export type TranscriptionResponseFormat = z.infer<
+  typeof transcriptionResponseFormatSchema
+>;
+
+export const speechHealthSchema = z.object({
+  ok: z.boolean(),
+  provider: z.literal("openai-compatible"),
+  upstreamOk: z.boolean(),
+  upstreamBaseUrl: z.string().url(),
+  sttModel: z.string().min(1),
+  ttsModel: z.string().min(1),
+  defaultVoice: z.string().min(1),
+  detail: z.string().optional(),
+});
+export type SpeechHealth = z.infer<typeof speechHealthSchema>;
+
+export const speechCapabilitiesSchema = z.object({
+  provider: z.literal("openai-compatible"),
+  upstreamBaseUrl: z.string().url(),
+  transcription: z.object({
+    endpoint: z.literal("/v1/audio/transcriptions"),
+    model: z.string().min(1),
+    responseFormats: z.array(transcriptionResponseFormatSchema),
+  }),
+  synthesis: z.object({
+    endpoint: z.literal("/v1/audio/speech"),
+    model: z.string().min(1),
+    defaultVoice: z.string().min(1),
+    responseFormats: z.array(speechAudioFormatSchema),
+  }),
+  realtime: z.object({
+    supported: z.boolean(),
+    upstreamEndpoint: z.string().optional(),
+  }),
+});
+export type SpeechCapabilities = z.infer<typeof speechCapabilitiesSchema>;
+
+export const speechSynthesisRequestSchema = z.object({
+  input: z.string().trim().min(1),
+  voice: z.string().trim().min(1).optional(),
+  model: z.string().trim().min(1).optional(),
+  responseFormat: speechAudioFormatSchema.optional(),
+  speed: z.number().min(0.25).max(4).optional(),
+});
+export type SpeechSynthesisRequest = z.infer<
+  typeof speechSynthesisRequestSchema
+>;
+
+export const transcriptionOptionsSchema = z.object({
+  language: z.string().trim().min(2).max(16).optional(),
+  prompt: z.string().trim().min(1).max(500).optional(),
+  model: z.string().trim().min(1).optional(),
+  temperature: z.number().min(0).max(1).optional(),
+  responseFormat: transcriptionResponseFormatSchema.optional(),
+});
+export type TranscriptionOptions = z.infer<typeof transcriptionOptionsSchema>;
+
+export const transcriptionResultSchema = z.object({
+  text: z.string(),
+  model: z.string().min(1),
+  provider: z.literal("openai-compatible"),
+  raw: z.unknown(),
+});
+export type TranscriptionResult = z.infer<typeof transcriptionResultSchema>;
+
 export const workspaceSummarySchema = z.object({
   storeRoot: z.string().min(1),
   copilotConfigDir: z.string().min(1),
@@ -392,6 +467,9 @@ export const healthStatusSchema = z.object({
   ok: z.boolean(),
   workspace: workspaceSummarySchema,
   lmStudioReachable: z.boolean(),
+  speechReachable: z.boolean().default(false),
+  speech: speechHealthSchema.optional(),
+  speechIssue: z.string().min(1).optional(),
   defaultModel: z.string().min(1).optional(),
   warmedModel: z.string().min(1).optional(),
   modelCount: z.number().int().nonnegative(),

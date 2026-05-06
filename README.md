@@ -8,6 +8,7 @@ Local-first chat PWA for `min-kb-store` agents, optimized for LM Studio with Gem
 - Hono local API runtime
 - `min-kb-store` bridge for agent discovery and Markdown chat history
 - LM Studio OpenAI-compatible streaming chat integration
+- Optional request/response speech via `min-speech-service` for hands-free turns
 - Gemma presets for **Fast**, **Balanced**, and **Deep**
 - Separate persistence for visible assistant output and captured thinking metadata
 - Optional browser notifications for completed background replies
@@ -30,6 +31,7 @@ packages/
 - pnpm 10+
 - LM Studio running locally with its OpenAI-compatible server enabled
 - A `min-kb-store` checkout
+- Optional for hands-free turns: `min-speech-service` plus a local OpenAI-compatible speech backend such as `speaches`
 
 ## Environment
 
@@ -44,6 +46,12 @@ Optional LM Studio overrides:
 ```bash
 export LM_STUDIO_BASE_URL=http://127.0.0.1:1234/v1
 export LM_STUDIO_MODEL=google/gemma-3-4b
+```
+
+Optional speech-service override:
+
+```bash
+export MIN_SPEECH_SERVICE_URL=http://127.0.0.1:8790
 ```
 
 When `LM_STUDIO_BASE_URL` is unset, the API now tries `127.0.0.1`, `localhost`,
@@ -74,6 +82,75 @@ pnpm build
 pnpm lint
 ```
 
+## Hands-free chat setup
+
+Speech support enables **hands-free chat**: speak a prompt, let the app
+transcribe it into the chat flow, optionally auto-send it for a hands-free turn,
+then play the assistant's final reply back as audio.
+
+This stays a **request/response** experience, not live realtime voice chat. The
+assistant finishes generating its full reply before spoken playback starts.
+
+1. In `/home/cmwen/dev/min-speech-service`, start the recommended local speech backend:
+
+   ```bash
+   docker compose -f compose.dev.yml up -d
+   ```
+
+2. In `/home/cmwen/dev/min-speech-service`, copy the local env file if needed:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. In `/home/cmwen/dev/min-speech-service`, start `min-speech-service`:
+
+   ```bash
+   pnpm install
+   pnpm dev
+   ```
+
+4. Verify the speech service:
+
+   ```bash
+   curl http://127.0.0.1:8790/health
+   curl http://127.0.0.1:8790/v1/capabilities
+   ```
+
+5. Start LM Studio with its OpenAI-compatible server enabled, then export your app env:
+
+   ```bash
+   export MIN_KB_STORE_ROOT=/absolute/path/to/min-kb-store
+   export MIN_SPEECH_SERVICE_URL=http://127.0.0.1:8790
+   ```
+
+6. Start this app with `pnpm dev`.
+
+Notes:
+
+- Browser speech calls stay behind this app's `/api/speech/*` proxy instead of
+  calling `min-speech-service` directly from the frontend.
+- If speech is offline or misconfigured, the UI now surfaces the proxied root
+  cause from `min-speech-service` instead of a generic playback/transcription
+  failure.
+- Browser microphone permission is required for voice input.
+- Voice turns stay **turn-based**: tap **Tap to speak**, talk normally, then the
+  recorder stops after you pause for a moment. You can still tap
+  **Stop listening** to finish sooner. After transcription, the app either
+  auto-sends or appends the transcript to the composer.
+- The composer now keeps **Hands-free** and **Auto-play** toggles visible, and
+  the same preferences also remain available in **Details → Speech**.
+- Spoken prompts only auto-send when **Hands-free** is on **and** the composer
+  is empty. Otherwise the transcript is appended so you can review or edit it.
+- Each completed assistant reply keeps a **Play reply** action. **Auto-play**
+  only applies to final assistant replies, and only while the app is visible.
+- Spoken replies strip Markdown formatting before synthesis so headings, links,
+  and inline code are read more naturally.
+- The preferred browser upload format is `audio/webm;codecs=opus`; the default
+  spoken reply format is `wav`.
+- The first transcription or synthesis request can be slower while local speech
+  models warm up.
+
 ## Scheduled tasks
 
 - Create recurring prompts from the **Details** panel for the selected agent.
@@ -87,9 +164,11 @@ pnpm lint
 
 ### Mobile and PWA behavior
 
-- Schedule status sync uses a battery-aware cadence: about every minute while
-  the app is active, every five minutes while backgrounded with notifications
-  enabled, and it pauses when offline.
+- The selected agent's schedule panel refreshes about every minute while the
+  schedule UI is visible and the app is active. Cross-agent completion
+  monitoring only polls in the background when notifications are enabled,
+  slows down when the next scheduled run is still far away, and pauses when
+  offline.
 - Completion alerts reuse the existing browser/service-worker notification path,
   so installed PWAs on mobile can still surface finished runs without an
   aggressive reconnect loop.

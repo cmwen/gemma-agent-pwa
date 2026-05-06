@@ -6,7 +6,15 @@ import {
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MessageCard } from "./App";
+import {
+  buildNextDraftFromTranscript,
+  getSpeechUnavailableMessage,
+  getVoiceTurnPlanSummary,
+  getVoiceTurnStatus,
+  MessageCard,
+  shouldAutoPlayAssistantReply,
+  shouldAutoSendTranscript,
+} from "./App";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
@@ -19,14 +27,18 @@ import {
   filterCommandItems,
   formatNotificationPermissionLabel,
   formatTime,
+  getHealthPollingInterval,
+  getModelPollingInterval,
   getNewScheduledTaskNotifications,
   getNextFocusableIndex,
   getNotificationPermission,
   getPreferredTheme,
+  getScheduleNotificationPollingInterval,
   getSchedulePollingInterval,
   isEditableElement,
   isNotificationSupported,
   isScrolledNearBottom,
+  markdownToPlainText,
   shouldBlurActiveEditableElementOnPointerDown,
   shouldSendCompletionNotification,
 } from "./app-utils";
@@ -229,6 +241,252 @@ describe("MessageCard", () => {
     expect(html).toContain('class="katex"');
     expect(html).toContain('class="katex-display"');
     expect(html).toContain("E=mc");
+  });
+
+  it("renders a reply playback button for assistant turns when speech is enabled", () => {
+    const turn: ChatTurn = {
+      messageId: "turn-2",
+      sender: "assistant",
+      createdAt: "2026-05-03T12:02:00.000Z",
+      bodyMarkdown: "I'll read this back to you.",
+      relativePath: "sessions/session-1/turn-2.md",
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(MessageCard, {
+        onPlaySpeech: vi.fn(),
+        speechLoading: false,
+        speechPlaying: false,
+        turn,
+      })
+    );
+
+    expect(html).toContain("Play reply");
+  });
+});
+
+describe("speech helper flow", () => {
+  it("strips markdown formatting before spoken playback", () => {
+    expect(
+      markdownToPlainText(
+        "## Checklist\n\n1. Run `pnpm test`\n2. Review the [deploy guide](https://example.com)."
+      )
+    ).toBe("Checklist\n1. Run pnpm test\n2. Review the deploy guide.");
+  });
+
+  it("auto-sends voice transcripts only for empty composers in hands-free mode", () => {
+    expect(
+      shouldAutoSendTranscript({
+        currentDraft: "",
+        handsFreeVoiceTurns: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldAutoSendTranscript({
+        currentDraft: "Keep this draft",
+        handsFreeVoiceTurns: true,
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoSendTranscript({
+        currentDraft: "",
+        handsFreeVoiceTurns: false,
+      })
+    ).toBe(false);
+  });
+
+  it("appends transcripts to existing drafts when review-before-send is needed", () => {
+    expect(buildNextDraftFromTranscript("", "Hello there")).toBe("Hello there");
+    expect(buildNextDraftFromTranscript("Existing notes", "Hello there")).toBe(
+      "Existing notes\nHello there"
+    );
+  });
+
+  it("only auto-plays spoken replies while speech is ready and the app is visible", () => {
+    expect(
+      shouldAutoPlayAssistantReply({
+        autoPlayReplies: true,
+        isDocumentHidden: false,
+        speechReady: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldAutoPlayAssistantReply({
+        autoPlayReplies: true,
+        isDocumentHidden: true,
+        speechReady: true,
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoPlayAssistantReply({
+        autoPlayReplies: false,
+        isDocumentHidden: false,
+        speechReady: true,
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoPlayAssistantReply({
+        autoPlayReplies: true,
+        isDocumentHidden: false,
+        speechReady: false,
+      })
+    ).toBe(false);
+  });
+
+  it("reports the current voice turn stage for the composer controls", () => {
+    expect(
+      getVoiceTurnStatus({
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isPlayingReply: false,
+        isPreparingReplyAudio: false,
+        isRecording: true,
+        isStreamingReply: false,
+        isThreadDeleted: false,
+        isTranscribing: false,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toEqual({
+      label: "Listening",
+      tone: "generating",
+    });
+
+    expect(
+      getVoiceTurnStatus({
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isPlayingReply: false,
+        isPreparingReplyAudio: false,
+        isRecording: false,
+        isStreamingReply: true,
+        isThreadDeleted: false,
+        isTranscribing: false,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toEqual({
+      label: "Generating reply",
+      tone: "generating",
+    });
+
+    expect(
+      getVoiceTurnStatus({
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isPlayingReply: false,
+        isPreparingReplyAudio: false,
+        isRecording: false,
+        isStreamingReply: false,
+        isThreadDeleted: false,
+        isTranscribing: false,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toEqual({
+      label: "Hands-free ready",
+      tone: "ready",
+    });
+  });
+
+  it("uses actionable labels when voice turns are blocked before recording starts", () => {
+    expect(
+      getVoiceTurnStatus({
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: false,
+        isPlayingReply: false,
+        isPreparingReplyAudio: false,
+        isRecording: false,
+        isStreamingReply: false,
+        isThreadDeleted: false,
+        isTranscribing: false,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toEqual({
+      label: "Choose an agent",
+      tone: "offline",
+    });
+
+    expect(
+      getVoiceTurnStatus({
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isPlayingReply: false,
+        isPreparingReplyAudio: false,
+        isRecording: false,
+        isStreamingReply: false,
+        isThreadDeleted: true,
+        isTranscribing: false,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toEqual({
+      label: "Restore chat",
+      tone: "offline",
+    });
+  });
+
+  it("describes whether the next voice turn will auto-send or stay in the composer", () => {
+    expect(
+      getVoiceTurnPlanSummary({
+        autoPlayReplies: true,
+        currentDraft: "",
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isThreadDeleted: false,
+        speechIssue: undefined,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toContain("sends automatically");
+
+    expect(
+      getVoiceTurnPlanSummary({
+        autoPlayReplies: true,
+        currentDraft: "Keep this note",
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isThreadDeleted: false,
+        speechIssue: undefined,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toContain("appended for review");
+
+    expect(
+      getVoiceTurnPlanSummary({
+        autoPlayReplies: false,
+        currentDraft: "",
+        handsFreeVoiceTurns: false,
+        hasSelectedAgent: true,
+        isThreadDeleted: false,
+        speechIssue: undefined,
+        speechReady: true,
+        speechSupported: true,
+      })
+    ).toContain("review it before sending");
+  });
+
+  it("shows the captured speech root cause when speech is offline", () => {
+    expect(
+      getVoiceTurnPlanSummary({
+        autoPlayReplies: true,
+        currentDraft: "",
+        handsFreeVoiceTurns: true,
+        hasSelectedAgent: true,
+        isThreadDeleted: false,
+        speechIssue:
+          "Speech is unavailable because min-speech-service at http://127.0.0.1:8790 is unreachable (connection to 127.0.0.1:8790 was refused). Start min-speech-service or update MIN_SPEECH_SERVICE_URL.",
+        speechReady: false,
+        speechSupported: true,
+      })
+    ).toContain("connection to 127.0.0.1:8790 was refused");
+  });
+
+  it("falls back to the default speech setup hint when no root cause is known", () => {
+    expect(getSpeechUnavailableMessage(undefined)).toBe(
+      "Start min-speech-service to enable transcription and spoken replies."
+    );
   });
 });
 
@@ -442,19 +700,82 @@ describe("notification helpers", () => {
     });
     expect(describeScheduledTask(task)).toBe("Every day at 09:15");
     expect(
+      getHealthPollingInterval({
+        isOnline: true,
+        documentHidden: false,
+      })
+    ).toBe(false);
+    expect(
+      getHealthPollingInterval({
+        isOnline: true,
+        documentHidden: true,
+      })
+    ).toBe(false);
+    expect(
+      getModelPollingInterval({
+        isOnline: true,
+        documentHidden: false,
+      })
+    ).toBe(300_000);
+    expect(
+      getModelPollingInterval({
+        isOnline: true,
+        documentHidden: true,
+      })
+    ).toBe(false);
+    expect(
       getSchedulePollingInterval({
         isOnline: true,
         documentHidden: false,
-        notificationsEnabled: false,
+        isSchedulePanelVisible: true,
       })
     ).toBe(60_000);
     expect(
       getSchedulePollingInterval({
         isOnline: true,
         documentHidden: true,
-        notificationsEnabled: true,
+        isSchedulePanelVisible: true,
+      })
+    ).toBe(false);
+    expect(
+      getSchedulePollingInterval({
+        isOnline: true,
+        documentHidden: false,
+        isSchedulePanelVisible: false,
       })
     ).toBe(300_000);
+    expect(
+      getScheduleNotificationPollingInterval({
+        isOnline: true,
+        documentHidden: false,
+        notificationsEnabled: true,
+      })
+    ).toBe(false);
+    expect(
+      getScheduleNotificationPollingInterval({
+        isOnline: true,
+        documentHidden: true,
+        notificationsEnabled: true,
+        now: new Date("2026-05-01T08:00:00.000Z"),
+        tasks: [task],
+      })
+    ).toBe(1_800_000);
+    expect(
+      getScheduleNotificationPollingInterval({
+        isOnline: true,
+        documentHidden: true,
+        notificationsEnabled: true,
+        tasks: [{ ...task, runningAt: "2026-05-01T09:15:00.000Z" }],
+      })
+    ).toBe(60_000);
+    expect(
+      getScheduleNotificationPollingInterval({
+        isOnline: true,
+        documentHidden: true,
+        notificationsEnabled: true,
+        tasks: [{ ...task, notifyOnCompletion: false }],
+      })
+    ).toBe(false);
     const latestRun = task.recentRuns[0];
     expect(latestRun).toBeDefined();
     expect(

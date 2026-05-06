@@ -9,6 +9,10 @@ import {
   partialChatRuntimeConfigSchema,
   sessionDeleteModeSchema,
   sessionListStateSchema,
+  speechCapabilitiesSchema,
+  speechHealthSchema,
+  speechSynthesisRequestSchema,
+  transcriptionResultSchema,
 } from "@gemma-agent-pwa/contracts";
 import {
   deleteSession,
@@ -48,10 +52,16 @@ import {
   registerScheduledTaskRoutes,
   startScheduledTaskRunner,
 } from "./scheduled-tasks.js";
+import {
+  createSpeechFetchFailureResponse,
+  forwardSpeechUpstreamError,
+  getSpeechHealthStatus,
+} from "./speech-errors.js";
 
 const workspace = await resolveWorkspace();
 const app = new Hono();
 const port = Number(process.env.GEMMA_AGENT_PWA_PORT ?? 8787);
+const defaultSpeechServiceBaseUrl = "http://127.0.0.1:8790";
 const allowedCorsOrigins = getAllowedCorsOrigins();
 app.use(
   "/api/*",
@@ -72,10 +82,15 @@ app.get("/api/health", async (context) => {
   const { models, reachable: lmStudioReachable } =
     await getLmStudioModelCatalog();
   const defaultModel = chooseDefaultModel(models);
+  const speechStatus = await getSpeechHealthStatus(getSpeechServiceBaseUrl());
+  const speech = speechStatus.health;
   return context.json({
     ok: true,
     workspace: workspaceSummary,
     lmStudioReachable,
+    speechReachable: Boolean(speech?.ok),
+    ...(speech ? { speech } : {}),
+    ...(speechStatus.issue ? { speechIssue: speechStatus.issue } : {}),
     ...(defaultModel ? { defaultModel: defaultModel.id } : {}),
     ...(lmStudioReachable && defaultModel
       ? { warmedModel: defaultModel.id }
@@ -91,6 +106,83 @@ app.get("/api/health", async (context) => {
 
 app.get("/api/models", async (context) => {
   return context.json(await listLmStudioModels());
+});
+
+app.get("/api/speech/health", async (context) => {
+  const upstream = await fetchSpeechUpstream(
+    "/health",
+    undefined,
+    "Speech health check failed"
+  );
+  if (!upstream.ok) {
+    return forwardSpeechUpstreamError(
+      upstream,
+      "Speech health check failed",
+      getSpeechServiceBaseUrl()
+    );
+  }
+  return context.json(speechHealthSchema.parse(await upstream.json()));
+});
+
+app.get("/api/speech/capabilities", async (context) => {
+  const upstream = await fetchSpeechUpstream(
+    "/v1/capabilities",
+    undefined,
+    "Speech capabilities request failed"
+  );
+  if (!upstream.ok) {
+    return forwardSpeechUpstreamError(
+      upstream,
+      "Speech capabilities request failed",
+      getSpeechServiceBaseUrl()
+    );
+  }
+  return context.json(speechCapabilitiesSchema.parse(await upstream.json()));
+});
+
+app.post("/api/speech/transcriptions", async (context) => {
+  const formData = await context.req.formData();
+  const upstream = await fetchSpeechUpstream(
+    "/v1/audio/transcriptions",
+    {
+      method: "POST",
+      body: cloneFormData(formData),
+    },
+    "Speech transcription failed"
+  );
+  if (!upstream.ok) {
+    return forwardSpeechUpstreamError(
+      upstream,
+      "Speech transcription failed",
+      getSpeechServiceBaseUrl()
+    );
+  }
+  return context.json(transcriptionResultSchema.parse(await upstream.json()));
+});
+
+app.post("/api/speech/speech", async (context) => {
+  const payload = speechSynthesisRequestSchema.parse(
+    (await context.req.json()) ?? {}
+  );
+  const upstream = await fetchSpeechUpstream(
+    "/v1/audio/speech",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+    "Speech synthesis failed"
+  );
+  if (!upstream.ok) {
+    return forwardSpeechUpstreamError(
+      upstream,
+      "Speech synthesis failed",
+      getSpeechServiceBaseUrl()
+    );
+  }
+  return createUpstreamBodyResponse(upstream);
 });
 
 app.get("/api/agents", async (context) => {
@@ -144,7 +236,11 @@ app.delete("/api/agents/:agentId/sessions/:sessionId", async (context) => {
   return context.body(null, 204);
 });
 
-registerScheduledTaskRoutes(app, workspace);
+const scheduledTaskRunner = startScheduledTaskRunner({ workspace });
+
+registerScheduledTaskRoutes(app, workspace, {
+  onScheduleMutation: scheduledTaskRunner.refresh,
+});
 
 app.post(
   "/api/agents/:agentId/sessions/:sessionId/restore",
@@ -321,8 +417,6 @@ serve(
     console.info(`Gemma Agent API listening on http://localhost:${port}`);
   }
 );
-startScheduledTaskRunner({ workspace });
-
 function chooseDefaultModel(
   models: ModelDescriptor[]
 ): ModelDescriptor | undefined {
@@ -403,4 +497,51 @@ function parseOrigin(origin: string): URL | undefined {
     }
     throw error;
   }
+}
+
+function getSpeechServiceBaseUrl(): string {
+  return (
+    process.env.MIN_SPEECH_SERVICE_URL?.trim() || defaultSpeechServiceBaseUrl
+  ).replace(/\/+$/, "");
+}
+
+function buildSpeechServiceUrl(path: string): string {
+  return `${getSpeechServiceBaseUrl()}${path}`;
+}
+
+function cloneFormData(formData: FormData): FormData {
+  const cloned = new FormData();
+  for (const [key, value] of formData.entries()) {
+    cloned.append(key, value);
+  }
+  return cloned;
+}
+
+async function fetchSpeechUpstream(
+  path: string,
+  init: RequestInit | undefined,
+  actionLabel: string
+): Promise<Response> {
+  try {
+    return await fetch(buildSpeechServiceUrl(path), init);
+  } catch (error) {
+    return createSpeechFetchFailureResponse(
+      actionLabel,
+      getSpeechServiceBaseUrl(),
+      error
+    );
+  }
+}
+
+function createUpstreamBodyResponse(response: Response): Response {
+  const headers = new Headers();
+  const contentType = response.headers.get("content-type");
+  if (contentType) {
+    headers.set("content-type", contentType);
+  }
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }

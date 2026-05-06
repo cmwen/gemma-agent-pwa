@@ -6,14 +6,17 @@ import {
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_PRESETS,
   getPresetById,
+  type HealthStatus,
   type PartialChatRuntimeConfig,
   type ScheduledTask,
   type ScheduledTaskCreate,
   type ScheduledTaskUpdate,
+  type SpeechCapabilities,
 } from "@gemma-agent-pwa/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type CSSProperties,
+  memo,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
@@ -39,14 +42,18 @@ import {
   filterCommandItems,
   formatNotificationPermissionLabel,
   formatTime,
+  getHealthPollingInterval,
+  getModelPollingInterval,
   getNewScheduledTaskNotifications,
   getNextFocusableIndex,
   getNextTheme,
   getNotificationPermission,
+  getScheduleNotificationPollingInterval,
   getSchedulePollingInterval,
   isEditableElement,
   isNotificationSupported,
   isScrolledNearBottom,
+  markdownToPlainText,
   type StreamSkillActivity,
   shouldBlurActiveEditableElementOnPointerDown,
   shouldSendCompletionNotification,
@@ -62,9 +69,12 @@ import {
   getScheduledTasks,
   getSession,
   getSessions,
+  getSpeechCapabilities,
   restoreSession as restoreSessionRequest,
   runScheduledTask as runScheduledTaskRequest,
   streamChat,
+  synthesizeSpeech,
+  transcribeAudio,
   updateScheduledTask as updateScheduledTaskRequest,
 } from "./lib/api";
 import {
@@ -117,6 +127,8 @@ type MobileSection = "agents" | "history" | "chat" | "details";
 type HistoryView = "active" | "deleted";
 type SessionAction = "soft-delete" | "restore" | "permanent-delete";
 type ResizablePanel = "agents" | "history";
+type RecordingState = "idle" | "recording" | "transcribing";
+type VoiceTurnStatusTone = "generating" | "offline" | "ready";
 
 const MARKDOWN_REMARK_PLUGINS = [remarkGfm, remarkMath];
 const MARKDOWN_REHYPE_PLUGINS = [rehypeKatex];
@@ -131,6 +143,15 @@ const DESKTOP_BREAKPOINT = 981;
 const DESKTOP_PANEL_GAP = 16;
 const MIN_CHAT_PANEL_WIDTH = 420;
 const RESIZE_STEP = 24;
+const HEALTH_QUERY_STALE_TIME_MS = 30_000;
+const MODELS_QUERY_STALE_TIME_MS = 5 * 60_000;
+const SPEECH_QUERY_STALE_TIME_MS = 5 * 60_000;
+const SPEECH_TRANSCRIPTION_TIMEOUT_MS = 30_000;
+const SPEECH_SYNTHESIS_TIMEOUT_MS = 30_000;
+const VOICE_ACTIVITY_ANALYSER_FFT_SIZE = 2048;
+const VOICE_ACTIVITY_START_THRESHOLD = 0.02;
+const VOICE_ACTIVITY_SILENCE_THRESHOLD = 0.01;
+const VOICE_ACTIVITY_SILENCE_DURATION_MS = 1_400;
 const PANEL_WIDTH_LIMITS = {
   agents: {
     defaultWidth: 280,
@@ -160,12 +181,13 @@ export default function App() {
   const lastScheduledRunNotifications = useAppStore(
     (state) => state.lastScheduledRunNotifications
   );
-  const drafts = useAppStore((state) => state.drafts);
   const themeMode = useAppStore((state) => state.themeMode);
   const modelDetailsOpen = useAppStore((state) => state.modelDetailsOpen);
   const notificationsEnabled = useAppStore(
     (state) => state.notificationsEnabled
   );
+  const autoPlayReplies = useAppStore((state) => state.autoPlayReplies);
+  const handsFreeVoiceTurns = useAppStore((state) => state.handsFreeVoiceTurns);
   const setSelectedAgentId = useAppStore((state) => state.setSelectedAgentId);
   const setSelectedSessionId = useAppStore(
     (state) => state.setSelectedSessionId
@@ -178,6 +200,10 @@ export default function App() {
   const setModelDetailsOpen = useAppStore((state) => state.setModelDetailsOpen);
   const setNotificationsEnabled = useAppStore(
     (state) => state.setNotificationsEnabled
+  );
+  const setAutoPlayReplies = useAppStore((state) => state.setAutoPlayReplies);
+  const setHandsFreeVoiceTurns = useAppStore(
+    (state) => state.setHandsFreeVoiceTurns
   );
 
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
@@ -222,6 +248,11 @@ export default function App() {
   >([]);
   const [liveThread, setLiveThread] = useState<ChatSession | undefined>();
   const [historyError, setHistoryError] = useState<string>();
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle");
+  const [speechError, setSpeechError] = useState<string>();
+  const [playingMessageId, setPlayingMessageId] = useState<string>();
+  const [speechLoadingMessageId, setSpeechLoadingMessageId] =
+    useState<string>();
   const [pendingSessionAction, setPendingSessionAction] = useState<{
     sessionId: string;
     action: SessionAction;
@@ -239,12 +270,29 @@ export default function App() {
   const helpCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
   const activeResizePanelRef = useRef<ResizablePanel | null>(null);
+  const pendingResizeAnimationFrameRef = useRef<number | undefined>(undefined);
+  const pendingResizePointerOffsetRef = useRef<number | undefined>(undefined);
   const desktopPanelWidthsRef = useRef(desktopPanelWidths);
   const notificationsEnabledRef = useRef(notificationsEnabled);
   const notificationPermissionRef = useRef(notificationPermission);
   const runtimeConfigSourceKeyRef = useRef<string>("");
+  const wasDocumentHiddenRef = useRef(isDocumentHidden);
+  const wasOnlineRef = useRef(isOnline);
   const forceAutoScrollTimelineRef = useRef(true);
   const timelineSyncKeyRef = useRef("");
+  const handleSendRef = useRef<(promptOverride?: string) => Promise<void>>(
+    async () => {}
+  );
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const cancelPendingTranscriptionRef = useRef(false);
+  const voiceActivityCleanupRef = useRef<(() => void) | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | undefined>(undefined);
+  const playbackAbortRef = useRef<AbortController | null>(null);
+  const playbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timelineMetricsRef = useRef<
     | {
         clientHeight: number;
@@ -256,27 +304,81 @@ export default function App() {
   const healthQuery = useQuery({
     queryKey: ["health"],
     queryFn: getHealth,
-    refetchInterval: 15_000,
+    retry: 1,
+    staleTime: HEALTH_QUERY_STALE_TIME_MS,
+    refetchInterval: getHealthPollingInterval({
+      documentHidden: isDocumentHidden,
+      isOnline,
+    }),
+    refetchIntervalInBackground: false,
   });
+  const shouldQueryModels = modelDetailsOpen && isOnline && !isDocumentHidden;
   const modelsQuery = useQuery({
     queryKey: ["models"],
     queryFn: getModels,
-    refetchInterval: 30_000,
+    retry: 1,
+    enabled: shouldQueryModels,
+    staleTime: MODELS_QUERY_STALE_TIME_MS,
+    refetchInterval: shouldQueryModels
+      ? getModelPollingInterval({
+          documentHidden: isDocumentHidden,
+          isOnline,
+        })
+      : false,
+    refetchIntervalInBackground: false,
+  });
+  const speechCapabilitiesQuery = useQuery({
+    queryKey: ["speech-capabilities"],
+    queryFn: getSpeechCapabilities,
+    retry: 1,
+    enabled: Boolean(healthQuery.data?.speechReachable && isOnline),
+    staleTime: SPEECH_QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
   });
   const agentsQuery = useQuery({
     queryKey: ["agents"],
     queryFn: getAgents,
   });
-  const schedulesQuery = useQuery({
-    queryKey: ["scheduled-tasks"],
+  const schedulePanelVisible =
+    scheduleEditorOpen || modelDetailsOpen || mobileSection === "details";
+  const schedulePollingInterval = getSchedulePollingInterval({
+    documentHidden: isDocumentHidden,
+    isOnline,
+    isSchedulePanelVisible: schedulePanelVisible,
+  });
+  const cachedNotificationSchedules = queryClient.getQueryData<ScheduledTask[]>(
+    ["scheduled-tasks", "notifications"]
+  );
+  const notificationPollingInterval = getScheduleNotificationPollingInterval({
+    documentHidden: isDocumentHidden,
+    isOnline,
+    notificationsEnabled,
+    tasks: cachedNotificationSchedules,
+  });
+  const selectedAgentSchedulesQuery = useQuery({
+    queryKey: ["scheduled-tasks", "agent", selectedAgentId],
+    queryFn: () => getScheduledTasks(selectedAgentId ?? ""),
+    retry: 1,
+    refetchInterval: schedulePollingInterval,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    enabled: Boolean(selectedAgentId && schedulePanelVisible),
+  });
+  const notificationSchedulesQuery = useQuery({
+    queryKey: ["scheduled-tasks", "notifications"],
     queryFn: () => getScheduledTasks(),
     retry: 1,
-    refetchInterval: getSchedulePollingInterval({
-      documentHidden: isDocumentHidden,
+    enabled:
+      notificationsEnabled &&
+      notificationPermission === "granted" &&
+      isDocumentHidden &&
       isOnline,
-      notificationsEnabled,
-    }),
-    refetchIntervalInBackground: notificationsEnabled,
+    refetchInterval: notificationPollingInterval,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   useEffect(() => {
@@ -289,32 +391,30 @@ export default function App() {
     () => agentsQuery.data?.find((agent) => agent.id === selectedAgentId),
     [agentsQuery.data, selectedAgentId]
   );
-  const selectedAgentSchedules = useMemo(
-    () =>
-      (schedulesQuery.data ?? []).filter(
-        (task) => task.agentId === selectedAgentId
-      ),
-    [schedulesQuery.data, selectedAgentId]
-  );
+  const selectedAgentSchedules = selectedAgentSchedulesQuery.data ?? [];
   const pendingScheduleNotifications = useMemo(
     () =>
       getNewScheduledTaskNotifications(
-        schedulesQuery.data ?? [],
+        notificationSchedulesQuery.data ?? [],
         lastScheduledRunNotifications
       ),
-    [lastScheduledRunNotifications, schedulesQuery.data]
+    [lastScheduledRunNotifications, notificationSchedulesQuery.data]
   );
 
   const agentDetailQuery = useQuery({
     queryKey: ["agent", selectedAgentId],
     queryFn: () => getAgent(selectedAgentId ?? ""),
     enabled: Boolean(selectedAgentId),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const sessionsQuery = useQuery({
     queryKey: ["sessions", selectedAgentId, historyView],
     queryFn: () => getSessions(selectedAgentId ?? "", historyView),
     enabled: Boolean(selectedAgentId),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   useEffect(() => {
@@ -355,6 +455,8 @@ export default function App() {
     queryKey: ["session", selectedAgentId, activeSessionId],
     queryFn: () => getSession(selectedAgentId ?? "", activeSessionId ?? ""),
     enabled: Boolean(selectedAgentId && activeSessionId),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   useEffect(() => {
@@ -391,6 +493,7 @@ export default function App() {
     const agentConfig = agentDetailQuery.data?.runtimeConfig;
     const sessionConfig = thread?.runtimeConfig;
     const fallbackModel =
+      healthQuery.data?.defaultModel ??
       modelsQuery.data?.find((model) => /gemma-4/i.test(model.id))?.id ??
       modelsQuery.data?.find((model) => model.isGemma)?.id ??
       modelsQuery.data?.[0]?.id;
@@ -429,6 +532,7 @@ export default function App() {
     setRuntimeConfig(nextRuntimeConfig);
   }, [
     agentDetailQuery.data,
+    healthQuery.data?.defaultModel,
     modelsQuery.data,
     runtimeConfigDirty,
     runtimeConfigSourceKey,
@@ -436,13 +540,27 @@ export default function App() {
   ]);
 
   const draftKey = buildDraftKey(selectedAgentId, activeSessionId);
-  const draft = drafts[draftKey] ?? "";
+  const draft = useAppStore(
+    useCallback((state) => state.drafts[draftKey] ?? "", [draftKey])
+  );
   const activePreset = getPresetById(runtimeConfig.presetId);
   const thinkingEnabled =
     runtimeConfig.lmStudioEnableThinking ?? activePreset.lmStudioEnableThinking;
   const modeValue = thinkingEnabled ? "think" : "fast";
-  const messages = buildMessages(thread, streaming);
-  const timelineSyncKey = `${messages.length}:${streaming.assistantText ?? ""}:${streaming.thinkingText ?? ""}:${streaming.sending ? "1" : "0"}`;
+  const messages = useMemo(
+    () => buildMessages(thread, streaming),
+    [thread, streaming]
+  );
+  const timelineSyncKey = useMemo(
+    () =>
+      `${messages.length}:${streaming.assistantText ?? ""}:${streaming.thinkingText ?? ""}:${streaming.sending ? "1" : "0"}`,
+    [
+      messages.length,
+      streaming.assistantText,
+      streaming.thinkingText,
+      streaming.sending,
+    ]
+  );
   const status = streaming.sending
     ? "Generating"
     : healthQuery.data?.lmStudioReachable
@@ -457,11 +575,73 @@ export default function App() {
     : selectedModel?.isGemma
       ? "Gemma tuned"
       : "Model fallback";
+  const speechSupported =
+    typeof navigator !== "undefined" &&
+    typeof MediaRecorder !== "undefined" &&
+    typeof navigator.mediaDevices?.getUserMedia === "function";
+  const speechReady = Boolean(healthQuery.data?.speechReachable);
+  const speechUnavailableMessage = getSpeechUnavailableMessage(
+    healthQuery.data
+  );
+  const isRecording = recordingState === "recording";
+  const isTranscribing = recordingState === "transcribing";
+  const canRecord =
+    Boolean(selectedAgentId) &&
+    !threadDeleted &&
+    !streaming.sending &&
+    !isTranscribing &&
+    speechReady &&
+    speechSupported;
+  const speechStatus = isRecording
+    ? "Listening... recording stops after you pause, or tap again to finish."
+    : isTranscribing
+      ? "Transcribing your prompt..."
+      : streaming.sending
+        ? "Generating the next assistant reply..."
+        : speechLoadingMessageId
+          ? "Preparing spoken reply..."
+          : playingMessageId
+            ? "Playing reply"
+            : !selectedAgentId
+              ? "Choose an agent to start a voice turn."
+              : threadDeleted
+                ? "Restore this chat to keep using voice turns."
+                : !speechSupported
+                  ? "This browser cannot record audio. You can still type or play replies."
+                  : speechReady
+                    ? handsFreeVoiceTurns
+                      ? "Tap to speak for a hands-free turn, or play any assistant reply."
+                      : "Tap to speak or play any assistant reply."
+                    : speechUnavailableMessage;
+  const voiceTurnStatus = getVoiceTurnStatus({
+    handsFreeVoiceTurns,
+    hasSelectedAgent: Boolean(selectedAgentId),
+    isPlayingReply: Boolean(playingMessageId),
+    isPreparingReplyAudio: Boolean(speechLoadingMessageId),
+    isRecording,
+    isStreamingReply: streaming.sending,
+    isThreadDeleted: threadDeleted,
+    isTranscribing,
+    speechReady,
+    speechSupported,
+  });
+  const voiceTurnPlanSummary = getVoiceTurnPlanSummary({
+    autoPlayReplies,
+    currentDraft: draft,
+    handsFreeVoiceTurns,
+    hasSelectedAgent: Boolean(selectedAgentId),
+    isThreadDeleted: threadDeleted,
+    speechIssue: healthQuery.data?.speechIssue,
+    speechReady,
+    speechSupported,
+  });
 
   const canSend =
     Boolean(selectedAgentId) &&
     draft.trim().length > 0 &&
     !streaming.sending &&
+    !isRecording &&
+    !isTranscribing &&
     Boolean(runtimeConfig.model) &&
     !threadDeleted;
 
@@ -492,6 +672,356 @@ export default function App() {
       });
     },
     [modelDetailsOpen, setModelDetailsOpen]
+  );
+
+  const stopSpeechPlayback = useCallback(() => {
+    playbackAbortRef.current?.abort();
+    playbackAbortRef.current = null;
+    if (playbackTimeoutRef.current) {
+      clearTimeout(playbackTimeoutRef.current);
+      playbackTimeoutRef.current = null;
+    }
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = undefined;
+    }
+    setPlayingMessageId(undefined);
+    setSpeechLoadingMessageId(undefined);
+  }, []);
+
+  const stopVoiceActivityMonitor = useCallback(() => {
+    voiceActivityCleanupRef.current?.();
+    voiceActivityCleanupRef.current = null;
+  }, []);
+
+  const discardRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      }
+    }
+    stopVoiceActivityMonitor();
+    recordedChunksRef.current = [];
+    stopMediaStream(mediaStreamRef.current);
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    setRecordingState("idle");
+  }, [stopVoiceActivityMonitor]);
+
+  const playAssistantReply = useCallback(
+    async (turn: ChatTurn) => {
+      const input = markdownToPlainText(turn.bodyMarkdown).trim();
+      if (!input) {
+        return;
+      }
+      if (!speechReady) {
+        setSpeechError(
+          getSpeechUnavailableMessage(
+            healthQuery.data,
+            "Speech isn't available right now. You can still type."
+          )
+        );
+        return;
+      }
+      if (
+        playingMessageId === turn.messageId ||
+        speechLoadingMessageId === turn.messageId
+      ) {
+        stopSpeechPlayback();
+        return;
+      }
+
+      setSpeechError(undefined);
+      stopSpeechPlayback();
+      setSpeechLoadingMessageId(turn.messageId);
+      const controller = new AbortController();
+      playbackAbortRef.current = controller;
+      playbackTimeoutRef.current = setTimeout(() => {
+        controller.abort();
+      }, SPEECH_SYNTHESIS_TIMEOUT_MS);
+
+      try {
+        const preferredFormat = pickPreferredSpeechFormat(
+          speechCapabilitiesQuery.data
+        );
+        const audioBlob = await synthesizeSpeech(
+          {
+            input,
+            ...(preferredFormat ? { responseFormat: preferredFormat } : {}),
+          },
+          {
+            signal: controller.signal,
+          }
+        );
+        if (playbackAbortRef.current === controller) {
+          playbackAbortRef.current = null;
+        }
+        if (playbackTimeoutRef.current) {
+          clearTimeout(playbackTimeoutRef.current);
+          playbackTimeoutRef.current = null;
+        }
+        const objectUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(objectUrl);
+        audioUrlRef.current = objectUrl;
+        audioRef.current = audio;
+        audio.onended = () => {
+          if (audioRef.current === audio) {
+            audioRef.current = null;
+          }
+          if (audioUrlRef.current === objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+            audioUrlRef.current = undefined;
+          }
+          setPlayingMessageId((current) =>
+            current === turn.messageId ? undefined : current
+          );
+        };
+        audio.onerror = () => {
+          stopSpeechPlayback();
+          setSpeechError(
+            "Reply audio couldn't play. Tap Play reply to try again."
+          );
+        };
+        setSpeechLoadingMessageId(undefined);
+        setPlayingMessageId(turn.messageId);
+        await audio.play();
+      } catch (error) {
+        stopSpeechPlayback();
+        if (isAbortError(error)) {
+          return;
+        }
+        setSpeechError(
+          error instanceof Error
+            ? error.message
+            : "Speech synthesis failed. You can still read the reply."
+        );
+      }
+    },
+    [
+      healthQuery.data,
+      playingMessageId,
+      speechCapabilitiesQuery.data,
+      speechLoadingMessageId,
+      speechReady,
+      stopSpeechPlayback,
+    ]
+  );
+
+  const transcribeRecording = useCallback(
+    async (audioBlob: Blob) => {
+      setSpeechError(undefined);
+      setRecordingState("transcribing");
+      cancelPendingTranscriptionRef.current = false;
+      transcriptionAbortRef.current?.abort();
+      const controller = new AbortController();
+      transcriptionAbortRef.current = controller;
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, SPEECH_TRANSCRIPTION_TIMEOUT_MS);
+
+      try {
+        const result = await transcribeAudio(audioBlob, {
+          filename: buildRecordingFilename(audioBlob.type),
+          signal: controller.signal,
+        });
+        const transcript = result.text.trim();
+        if (!transcript) {
+          throw new Error("I didn't catch that. Try again.");
+        }
+        setMobileSection("chat");
+        if (
+          shouldAutoSendTranscript({
+            currentDraft: draft,
+            handsFreeVoiceTurns,
+          })
+        ) {
+          await handleSendRef.current(transcript);
+          return;
+        }
+        const nextDraft = buildNextDraftFromTranscript(draft, transcript);
+        setDraft(draftKey, nextDraft);
+        requestAnimationFrame(() => {
+          composerInputRef.current?.focus();
+          composerInputRef.current?.setSelectionRange(
+            nextDraft.length,
+            nextDraft.length
+          );
+        });
+      } catch (error) {
+        if (isAbortError(error) && !timedOut) {
+          return;
+        }
+        setSpeechError(
+          timedOut
+            ? "Transcription timed out. Try again."
+            : error instanceof Error
+              ? error.message
+              : "Speech transcription failed. You can still type."
+        );
+      } finally {
+        clearTimeout(timeoutId);
+        if (transcriptionAbortRef.current === controller) {
+          transcriptionAbortRef.current = null;
+        }
+        cancelPendingTranscriptionRef.current = false;
+        setRecordingState("idle");
+      }
+    },
+    [draft, draftKey, handsFreeVoiceTurns, setDraft]
+  );
+
+  const startRecording = useCallback(async () => {
+    if (!speechSupported) {
+      setSpeechError(
+        "This browser can't record audio yet. You can still type."
+      );
+      return;
+    }
+    if (!speechReady) {
+      setSpeechError(
+        getSpeechUnavailableMessage(
+          healthQuery.data,
+          "Speech isn't available right now. You can still type."
+        )
+      );
+      return;
+    }
+
+    stopSpeechPlayback();
+    setSpeechError(undefined);
+    cancelPendingTranscriptionRef.current = false;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = getPreferredRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mediaStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordedChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onerror = () => {
+        stopVoiceActivityMonitor();
+        stopMediaStream(mediaStreamRef.current);
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        recordedChunksRef.current = [];
+        setRecordingState("idle");
+        setSpeechError("Microphone capture failed. Try again.");
+      };
+      recorder.onstop = () => {
+        stopVoiceActivityMonitor();
+        const audioBlob = new Blob(recordedChunksRef.current, {
+          type: recorder.mimeType || mimeType || "audio/webm",
+        });
+        stopMediaStream(mediaStreamRef.current);
+        mediaStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        recordedChunksRef.current = [];
+        if (cancelPendingTranscriptionRef.current) {
+          cancelPendingTranscriptionRef.current = false;
+          setRecordingState("idle");
+          return;
+        }
+        if (audioBlob.size === 0) {
+          setRecordingState("idle");
+          setSpeechError("I didn't catch that. Try again.");
+          return;
+        }
+        void transcribeRecording(audioBlob);
+      };
+      recorder.start();
+      stopVoiceActivityMonitor();
+      voiceActivityCleanupRef.current = startVoiceActivityMonitor(
+        stream,
+        () => {
+          if (
+            mediaRecorderRef.current !== recorder ||
+            recorder.state !== "recording"
+          ) {
+            return;
+          }
+          setRecordingState("transcribing");
+          recorder.stop();
+        }
+      );
+      setRecordingState("recording");
+    } catch (error) {
+      stopVoiceActivityMonitor();
+      stopMediaStream(mediaStreamRef.current);
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setRecordingState("idle");
+      setSpeechError(
+        error instanceof DOMException && error.name === "NotAllowedError"
+          ? "Microphone is blocked. Allow it in browser settings."
+          : error instanceof Error
+            ? error.message
+            : "Microphone capture failed. Try again."
+      );
+    }
+  }, [
+    healthQuery.data,
+    speechReady,
+    speechSupported,
+    stopSpeechPlayback,
+    stopVoiceActivityMonitor,
+    transcribeRecording,
+  ]);
+
+  const cancelTranscription = useCallback(() => {
+    cancelPendingTranscriptionRef.current = true;
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
+    setRecordingState("idle");
+    setSpeechError(undefined);
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      return;
+    }
+    setRecordingState("transcribing");
+    recorder.stop();
+  }, []);
+
+  useEffect(
+    () => () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder) {
+        recorder.ondataavailable = null;
+        recorder.onerror = null;
+        recorder.onstop = null;
+        if (recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      }
+      stopMediaStream(mediaStreamRef.current);
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      recordedChunksRef.current = [];
+      cancelPendingTranscriptionRef.current = false;
+      transcriptionAbortRef.current?.abort();
+      transcriptionAbortRef.current = null;
+      stopVoiceActivityMonitor();
+      stopSpeechPlayback();
+    },
+    [stopSpeechPlayback, stopVoiceActivityMonitor]
   );
   const openCommandPalette = useCallback(() => {
     lastFocusedElementRef.current =
@@ -714,6 +1244,17 @@ export default function App() {
     },
     []
   );
+
+  useEffect(() => {
+    const becameVisible = wasDocumentHiddenRef.current && !isDocumentHidden;
+    const becameOnline = !wasOnlineRef.current && isOnline;
+    wasDocumentHiddenRef.current = isDocumentHidden;
+    wasOnlineRef.current = isOnline;
+
+    if ((becameVisible || becameOnline) && isOnline && !isDocumentHidden) {
+      void healthQuery.refetch();
+    }
+  }, [healthQuery, isDocumentHidden, isOnline]);
 
   useEffect(() => {
     const timeline = timelineRef.current;
@@ -965,11 +1506,36 @@ export default function App() {
   }, [normalizeDesktopPanelWidths]);
 
   useEffect(() => {
+    const flushPendingResize = () => {
+      pendingResizeAnimationFrameRef.current = undefined;
+      if (
+        pendingResizePointerOffsetRef.current === undefined ||
+        !activeResizePanelRef.current ||
+        window.innerWidth < DESKTOP_BREAKPOINT
+      ) {
+        return;
+      }
+      const pointerOffset = pendingResizePointerOffsetRef.current;
+      if (activeResizePanelRef.current === "agents") {
+        updateDesktopPanelWidth("agents", pointerOffset);
+        return;
+      }
+      updateDesktopPanelWidth(
+        "history",
+        pointerOffset - desktopPanelWidthsRef.current.agents - DESKTOP_PANEL_GAP
+      );
+    };
+
     function stopPanelResize() {
       if (!activeResizePanelRef.current) {
         return;
       }
       activeResizePanelRef.current = null;
+      pendingResizePointerOffsetRef.current = undefined;
+      if (pendingResizeAnimationFrameRef.current !== undefined) {
+        cancelAnimationFrame(pendingResizeAnimationFrameRef.current);
+        pendingResizeAnimationFrameRef.current = undefined;
+      }
       document.body.classList.remove("is-resizing-panels");
     }
 
@@ -982,21 +1548,22 @@ export default function App() {
         return;
       }
       const shellBounds = appShellRef.current.getBoundingClientRect();
-      const pointerOffset = event.clientX - shellBounds.left;
-      if (activeResizePanelRef.current === "agents") {
-        updateDesktopPanelWidth("agents", pointerOffset);
+      pendingResizePointerOffsetRef.current = event.clientX - shellBounds.left;
+      if (pendingResizeAnimationFrameRef.current !== undefined) {
         return;
       }
-      updateDesktopPanelWidth(
-        "history",
-        pointerOffset - desktopPanelWidthsRef.current.agents - DESKTOP_PANEL_GAP
-      );
+      pendingResizeAnimationFrameRef.current =
+        requestAnimationFrame(flushPendingResize);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", stopPanelResize);
     window.addEventListener("pointercancel", stopPanelResize);
     return () => {
+      if (pendingResizeAnimationFrameRef.current !== undefined) {
+        cancelAnimationFrame(pendingResizeAnimationFrameRef.current);
+        pendingResizeAnimationFrameRef.current = undefined;
+      }
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopPanelResize);
       window.removeEventListener("pointercancel", stopPanelResize);
@@ -1402,10 +1969,6 @@ export default function App() {
     buttons[nextIndex]?.focus();
   }
 
-  function isAbortError(error: unknown): boolean {
-    return error instanceof DOMException && error.name === "AbortError";
-  }
-
   useEffect(() => {
     function handleGlobalKeydown(event: globalThis.KeyboardEvent) {
       if (
@@ -1481,10 +2044,12 @@ export default function App() {
     openHelpDialog,
   ]);
 
-  async function handleSend() {
-    if (!selectedAgentId || !draft.trim() || threadDeleted) {
+  async function handleSend(promptOverride?: string) {
+    const prompt = (promptOverride ?? draft).trim();
+    if (!selectedAgentId || !prompt || threadDeleted) {
       return;
     }
+    setSpeechError(undefined);
     forceAutoScrollTimelineRef.current = true;
     if (
       typeof window !== "undefined" &&
@@ -1502,7 +2067,6 @@ export default function App() {
       skillActivities: [],
     });
 
-    const prompt = draft.trim();
     setDraft(draftKey, "");
 
     try {
@@ -1527,11 +2091,16 @@ export default function App() {
                 }
                 break;
               case "assistant_snapshot":
-                setStreaming((state) => ({
-                  ...state,
-                  assistantText: event.assistantText,
-                  thinkingText: event.thinkingText,
-                }));
+                setStreaming((state) =>
+                  state.assistantText === event.assistantText &&
+                  state.thinkingText === event.thinkingText
+                    ? state
+                    : {
+                        ...state,
+                        assistantText: event.assistantText,
+                        thinkingText: event.thinkingText,
+                      }
+                );
                 break;
               case "skill_call":
                 setStreaming((state) => ({
@@ -1582,6 +2151,15 @@ export default function App() {
                   skillActivities: state.skillActivities ?? [],
                 }));
                 maybeNotifyOnCompletion(event.response.thread);
+                if (
+                  shouldAutoPlayAssistantReply({
+                    autoPlayReplies,
+                    isDocumentHidden,
+                    speechReady: Boolean(healthQuery.data?.speechReachable),
+                  })
+                ) {
+                  void playAssistantReply(event.response.assistantTurn);
+                }
                 break;
               case "error":
                 setStreaming({
@@ -1616,6 +2194,8 @@ export default function App() {
     }
   }
 
+  handleSendRef.current = handleSend;
+
   function handleStop() {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -1636,6 +2216,8 @@ export default function App() {
     if (!selectedAgentId) {
       return;
     }
+    discardRecording();
+    stopSpeechPlayback();
     forceAutoScrollTimelineRef.current = true;
     timelineMetricsRef.current = undefined;
     abortRef.current?.abort();
@@ -1682,6 +2264,7 @@ export default function App() {
         if (activeSessionId === session.sessionId) {
           abortRef.current?.abort();
           abortRef.current = null;
+          discardRecording();
         }
         await deleteSessionRequest(
           selectedAgentId,
@@ -1692,6 +2275,7 @@ export default function App() {
           setSelectedSessionId(selectedAgentId, null);
           setLiveThread(undefined);
           setStreaming({ sending: false, skillActivities: [] });
+          stopSpeechPlayback();
           setMobileSection("history");
         }
       }
@@ -2135,6 +2719,17 @@ export default function App() {
             messages.map((message) => (
               <MessageCard
                 key={message.key}
+                onPlaySpeech={
+                  speechReady
+                    ? (turn) => {
+                        void playAssistantReply(turn);
+                      }
+                    : undefined
+                }
+                speechLoading={
+                  speechLoadingMessageId === message.turn.messageId
+                }
+                speechPlaying={playingMessageId === message.turn.messageId}
                 skillActivities={message.skillActivities}
                 turn={message.turn}
                 streaming={message.streaming}
@@ -2147,6 +2742,50 @@ export default function App() {
           {streaming.error ? (
             <p className="error-text">{streaming.error}</p>
           ) : null}
+          {speechError ? <p className="error-text">{speechError}</p> : null}
+          <div className="voice-toolbar">
+            <div className="voice-toolbar-copy">
+              <span className="eyebrow">Voice</span>
+              <div className="chip-row voice-toolbar-status">
+                <span
+                  className={`status-chip ${
+                    voiceTurnStatus.tone === "generating"
+                      ? "status-generating"
+                      : voiceTurnStatus.tone === "offline"
+                        ? "status-offline"
+                        : "status-ready"
+                  }`}
+                >
+                  {voiceTurnStatus.label}
+                </span>
+              </div>
+              <p className="support-text voice-toolbar-hint">
+                {voiceTurnPlanSummary}
+              </p>
+            </div>
+            <div className="voice-toolbar-actions">
+              <button
+                aria-pressed={handsFreeVoiceTurns}
+                className={`ghost-button voice-toggle ${
+                  handsFreeVoiceTurns ? "is-active" : ""
+                }`}
+                onClick={() => setHandsFreeVoiceTurns(!handsFreeVoiceTurns)}
+                type="button"
+              >
+                Hands-free {handsFreeVoiceTurns ? "on" : "off"}
+              </button>
+              <button
+                aria-pressed={autoPlayReplies}
+                className={`ghost-button voice-toggle ${
+                  autoPlayReplies ? "is-active" : ""
+                }`}
+                onClick={() => setAutoPlayReplies(!autoPlayReplies)}
+                type="button"
+              >
+                Auto-play {autoPlayReplies ? "on" : "off"}
+              </button>
+            </div>
+          </div>
           <textarea
             aria-describedby="composer-shortcuts"
             aria-label="Message composer"
@@ -2176,10 +2815,16 @@ export default function App() {
                 ? "LM Studio connected"
                 : "History-only mode"}
             </span>
+            <span className="chip">
+              {speechReady ? "Speech ready" : "Speech offline"}
+            </span>
             <span className="chip" id="composer-shortcuts">
               Ctrl/Cmd+Enter sends
             </span>
           </div>
+          <p aria-live="polite" className="support-text" role="status">
+            {speechStatus}
+          </p>
           <div className="composer-actions">
             {streaming.sending ? (
               <button
@@ -2190,6 +2835,32 @@ export default function App() {
                 Stop
               </button>
             ) : null}
+            <button
+              aria-label={
+                isRecording
+                  ? "Stop speech recording"
+                  : isTranscribing
+                    ? "Cancel speech transcription"
+                    : "Start speech recording"
+              }
+              aria-pressed={isRecording}
+              className="secondary-button"
+              disabled={isRecording || isTranscribing ? false : !canRecord}
+              onClick={() =>
+                isRecording
+                  ? stopRecording()
+                  : isTranscribing
+                    ? cancelTranscription()
+                    : void startRecording()
+              }
+              type="button"
+            >
+              {isRecording
+                ? "Stop listening"
+                : isTranscribing
+                  ? "Cancel speech"
+                  : "Tap to speak"}
+            </button>
             <button
               className="primary-button"
               disabled={!canSend}
@@ -2297,6 +2968,90 @@ export default function App() {
               </div>
             </section>
             <section className="detail-section">
+              <h3>Speech</h3>
+              <p>
+                Request/response speech keeps voice input and spoken replies in
+                the same chat flow without enabling live realtime audio.
+              </p>
+              <div className="chip-row">
+                <span className="chip">
+                  {speechReady ? "Speech connected" : "Speech unavailable"}
+                </span>
+                {speechCapabilitiesQuery.data ? (
+                  <span className="chip">
+                    Voice {speechCapabilitiesQuery.data.synthesis.defaultVoice}
+                  </span>
+                ) : null}
+                <span className="chip">
+                  {autoPlayReplies ? "Auto-play on" : "Auto-play off"}
+                </span>
+                <span className="chip">
+                  {handsFreeVoiceTurns ? "Hands-free on" : "Hands-free off"}
+                </span>
+              </div>
+              <div className="detail-actions">
+                <label className="checkbox-row">
+                  <input
+                    checked={autoPlayReplies}
+                    onChange={(event) =>
+                      setAutoPlayReplies(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span>Auto-play final assistant replies</span>
+                </label>
+                <label className="checkbox-row">
+                  <input
+                    checked={handsFreeVoiceTurns}
+                    onChange={(event) =>
+                      setHandsFreeVoiceTurns(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    Auto-send spoken prompts when the composer is empty
+                  </span>
+                </label>
+              </div>
+              <p className="support-text detail-hint">
+                Keep this on for hands-free turns. Turn it off when you want to
+                review or edit each transcript before sending.
+              </p>
+              {speechCapabilitiesQuery.data ? (
+                <dl className="stats-grid">
+                  <div>
+                    <dt>STT model</dt>
+                    <dd>{speechCapabilitiesQuery.data.transcription.model}</dd>
+                  </div>
+                  <div>
+                    <dt>TTS model</dt>
+                    <dd>{speechCapabilitiesQuery.data.synthesis.model}</dd>
+                  </div>
+                  <div>
+                    <dt>Voice</dt>
+                    <dd>
+                      {speechCapabilitiesQuery.data.synthesis.defaultVoice}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Formats</dt>
+                    <dd>
+                      {speechCapabilitiesQuery.data.synthesis.responseFormats.join(
+                        ", "
+                      )}
+                    </dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="support-text detail-hint">
+                  {getSpeechUnavailableMessage(
+                    healthQuery.data,
+                    "Speech stays optional. If the local speech stack is offline, you can keep chatting with text only."
+                  )}
+                </p>
+              )}
+            </section>
+            <section className="detail-section">
               <h3>Scheduled tasks</h3>
               <p>
                 Run saved prompts every hour, every day, or every week. The API
@@ -2311,15 +3066,11 @@ export default function App() {
                 <span className="chip">{isOnline ? "Online" : "Offline"}</span>
                 <span className="chip">
                   Polling{" "}
-                  {getSchedulePollingInterval({
-                    documentHidden: isDocumentHidden,
-                    isOnline,
-                    notificationsEnabled,
-                  }) === false
+                  {schedulePollingInterval === false
                     ? "paused"
-                    : isDocumentHidden
-                      ? "5 min"
-                      : "1 min"}
+                    : schedulePollingInterval === 60_000
+                      ? "1 min"
+                      : "5 min"}
                 </span>
               </div>
               <div className="detail-actions">
@@ -2906,7 +3657,10 @@ export default function App() {
   );
 }
 
-export function MessageCard(props: {
+export const MessageCard = memo(function MessageCard(props: {
+  onPlaySpeech?: (turn: ChatTurn) => void;
+  speechLoading?: boolean;
+  speechPlaying?: boolean;
   skillActivities?: StreamSkillActivity[];
   turn: ChatTurn;
   streaming?: boolean;
@@ -2931,9 +3685,35 @@ export function MessageCard(props: {
     >
       <div className="message-header">
         <strong>{label}</strong>
-        <span>
-          {props.streaming ? "Streaming..." : formatTime(props.turn.createdAt)}
-        </span>
+        <div className="message-header-actions">
+          {props.onPlaySpeech &&
+          props.turn.sender === "assistant" &&
+          hasBody &&
+          !props.streaming ? (
+            <button
+              aria-label={
+                props.speechPlaying
+                  ? "Stop reply playback"
+                  : "Play spoken reply"
+              }
+              aria-pressed={Boolean(props.speechPlaying)}
+              className="ghost-button message-audio-button"
+              onClick={() => props.onPlaySpeech?.(props.turn)}
+              type="button"
+            >
+              {props.speechLoading
+                ? "Preparing audio..."
+                : props.speechPlaying
+                  ? "Stop reply"
+                  : "Play reply"}
+            </button>
+          ) : null}
+          <span>
+            {props.streaming
+              ? "Streaming..."
+              : formatTime(props.turn.createdAt)}
+          </span>
+        </div>
       </div>
       {hasBody ? (
         <div
@@ -2983,7 +3763,7 @@ export function MessageCard(props: {
       ) : null}
     </article>
   );
-}
+});
 
 function resolveSkillActivities(
   activities: StreamSkillActivity[],
@@ -3017,6 +3797,198 @@ function resolveSkillActivities(
   );
 }
 
+function stopMediaStream(stream: MediaStream | null | undefined) {
+  stream?.getTracks().forEach((track) => {
+    track.stop();
+  });
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function getPreferredRecordingMimeType(): string | undefined {
+  if (typeof MediaRecorder === "undefined") {
+    return undefined;
+  }
+
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  return candidates.find((candidate) =>
+    MediaRecorder.isTypeSupported(candidate)
+  );
+}
+
+function buildRecordingFilename(contentType: string): string {
+  const extension = contentType.includes("mp4")
+    ? "m4a"
+    : contentType.includes("webm")
+      ? "webm"
+      : "wav";
+  return `recording.${extension}`;
+}
+
+export function buildNextDraftFromTranscript(
+  currentDraft: string,
+  transcript: string
+): string {
+  const trimmedDraft = currentDraft.trim();
+  return trimmedDraft ? `${trimmedDraft}\n${transcript}` : transcript;
+}
+
+export function shouldAutoSendTranscript(options: {
+  currentDraft: string;
+  handsFreeVoiceTurns: boolean;
+}): boolean {
+  return (
+    options.handsFreeVoiceTurns && options.currentDraft.trim().length === 0
+  );
+}
+
+export function shouldAutoPlayAssistantReply(options: {
+  autoPlayReplies: boolean;
+  isDocumentHidden: boolean;
+  speechReady: boolean;
+}): boolean {
+  return (
+    options.autoPlayReplies && options.speechReady && !options.isDocumentHidden
+  );
+}
+
+export function getVoiceTurnStatus(options: {
+  handsFreeVoiceTurns: boolean;
+  hasSelectedAgent: boolean;
+  isPlayingReply: boolean;
+  isPreparingReplyAudio: boolean;
+  isRecording: boolean;
+  isStreamingReply: boolean;
+  isThreadDeleted: boolean;
+  isTranscribing: boolean;
+  speechReady: boolean;
+  speechSupported: boolean;
+}): {
+  label: string;
+  tone: VoiceTurnStatusTone;
+} {
+  if (options.isRecording) {
+    return {
+      label: "Listening",
+      tone: "generating",
+    };
+  }
+  if (options.isTranscribing) {
+    return {
+      label: "Transcribing",
+      tone: "generating",
+    };
+  }
+  if (options.isStreamingReply) {
+    return {
+      label: "Generating reply",
+      tone: "generating",
+    };
+  }
+  if (options.isPreparingReplyAudio) {
+    return {
+      label: "Preparing audio",
+      tone: "generating",
+    };
+  }
+  if (options.isPlayingReply) {
+    return {
+      label: "Playing reply",
+      tone: "ready",
+    };
+  }
+  if (!options.hasSelectedAgent) {
+    return {
+      label: "Choose an agent",
+      tone: "offline",
+    };
+  }
+  if (options.isThreadDeleted) {
+    return {
+      label: "Restore chat",
+      tone: "offline",
+    };
+  }
+  if (!options.speechReady) {
+    return {
+      label: "Speech offline",
+      tone: "offline",
+    };
+  }
+  if (!options.speechSupported) {
+    return {
+      label: "Mic unavailable",
+      tone: "offline",
+    };
+  }
+  return {
+    label: options.handsFreeVoiceTurns
+      ? "Hands-free ready"
+      : "Review before send",
+    tone: "ready",
+  };
+}
+
+export function getVoiceTurnPlanSummary(options: {
+  autoPlayReplies: boolean;
+  currentDraft: string;
+  handsFreeVoiceTurns: boolean;
+  hasSelectedAgent: boolean;
+  isThreadDeleted: boolean;
+  speechIssue?: string;
+  speechReady: boolean;
+  speechSupported: boolean;
+}): string {
+  if (!options.hasSelectedAgent) {
+    return "Select an agent, then start a spoken turn from the composer.";
+  }
+  if (options.isThreadDeleted) {
+    return "Restore this chat before starting another spoken turn.";
+  }
+  if (!options.speechReady) {
+    return getSpeechUnavailableMessage(
+      options.speechIssue ? { speechIssue: options.speechIssue } : undefined
+    );
+  }
+  if (!options.speechSupported) {
+    return "This browser can still play spoken replies, but microphone capture is unavailable.";
+  }
+  if (!options.handsFreeVoiceTurns) {
+    return "After you pause, the transcript stays in the composer so you can review it before sending.";
+  }
+  if (options.currentDraft.trim().length > 0) {
+    return "Because the composer already has text, the next transcript will be appended for review before sending.";
+  }
+  return options.autoPlayReplies
+    ? "After you pause, the transcript sends automatically and the final reply plays aloud."
+    : "After you pause, the transcript sends automatically. Use Play reply if you want audio.";
+}
+
+export function getSpeechUnavailableMessage(
+  health:
+    | Pick<HealthStatus, "speechIssue">
+    | {
+        speechIssue?: string;
+      }
+    | undefined,
+  fallback = "Start min-speech-service to enable transcription and spoken replies."
+): string {
+  return health?.speechIssue?.trim() || fallback;
+}
+
+function pickPreferredSpeechFormat(
+  capabilities: SpeechCapabilities | undefined
+): "wav" | "mp3" | "flac" | "pcm" | undefined {
+  if (!capabilities) {
+    return "wav";
+  }
+  return capabilities.synthesis.responseFormats.includes("wav")
+    ? "wav"
+    : capabilities.synthesis.responseFormats[0];
+}
+
 function findLatestPendingSkillActivityIndex(
   activities: StreamSkillActivity[],
   skillName: string
@@ -3029,6 +4001,88 @@ function findLatestPendingSkillActivityIndex(
   }
 
   return -1;
+}
+
+function startVoiceActivityMonitor(
+  stream: MediaStream,
+  onSilenceDetected: () => void
+): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const AudioContextConstructor =
+    window.AudioContext ??
+    (window as Window & { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioContextConstructor) {
+    return () => {};
+  }
+
+  const audioContext = new AudioContextConstructor();
+  const source = audioContext.createMediaStreamSource(stream);
+  const analyser = audioContext.createAnalyser();
+  analyser.fftSize = VOICE_ACTIVITY_ANALYSER_FFT_SIZE;
+  source.connect(analyser);
+
+  const samples = new Uint8Array(analyser.fftSize);
+  let heardSpeech = false;
+  let frameId = 0;
+  let lastVoiceAt = 0;
+  let stopped = false;
+
+  const checkLevel = () => {
+    if (stopped) {
+      return;
+    }
+    analyser.getByteTimeDomainData(samples);
+    const rms = calculateNormalizedRms(samples);
+    const now = performance.now();
+
+    if (
+      rms >=
+      (heardSpeech
+        ? VOICE_ACTIVITY_SILENCE_THRESHOLD
+        : VOICE_ACTIVITY_START_THRESHOLD)
+    ) {
+      heardSpeech = true;
+      lastVoiceAt = now;
+    } else if (
+      heardSpeech &&
+      now - lastVoiceAt >= VOICE_ACTIVITY_SILENCE_DURATION_MS
+    ) {
+      onSilenceDetected();
+      return;
+    }
+
+    frameId = window.requestAnimationFrame(checkLevel);
+  };
+
+  if (audioContext.state === "suspended") {
+    void audioContext.resume().catch(() => {});
+  }
+  frameId = window.requestAnimationFrame(checkLevel);
+
+  return () => {
+    stopped = true;
+    if (frameId) {
+      window.cancelAnimationFrame(frameId);
+    }
+    source.disconnect();
+    analyser.disconnect();
+    void audioContext.close().catch(() => {});
+  };
+}
+
+function calculateNormalizedRms(samples: Uint8Array): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  let total = 0;
+  for (const sample of samples) {
+    const centered = (sample - 128) / 128;
+    total += centered * centered;
+  }
+  return Math.sqrt(total / samples.length);
 }
 
 function createScheduleDraftState(task?: ScheduledTask): ScheduleDraftState {

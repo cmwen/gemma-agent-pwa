@@ -10,6 +10,8 @@ import {
   restoreSession,
   runScheduledTask,
   streamChat,
+  synthesizeSpeech,
+  transcribeAudio,
   updateScheduledTask,
 } from "./api";
 
@@ -77,6 +79,24 @@ describe("scheduled task API helpers", () => {
     await getScheduledTasks();
 
     expect(fetchMock).toHaveBeenCalledWith("/api/schedules", undefined);
+  });
+
+  it("lists scheduled tasks for a specific agent when selected", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })
+    );
+
+    await getScheduledTasks("release-planner");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agents/release-planner/schedules",
+      undefined
+    );
   });
 
   it("posts, patches, runs, and deletes scheduled tasks", async () => {
@@ -176,6 +196,104 @@ describe("scheduled task API helpers", () => {
   });
 });
 
+describe("speech API helpers", () => {
+  it("posts multipart audio uploads for transcription", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          text: "hello world",
+          model: "Systran/faster-distil-whisper-small.en",
+          provider: "openai-compatible",
+          raw: { text: "hello world" },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+
+    await transcribeAudio(new Blob(["voice"], { type: "audio/webm" }), {
+      filename: "voice.webm",
+      language: "en",
+      signal: controller.signal,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("/api/speech/transcriptions");
+    expect(init).toMatchObject({ method: "POST" });
+    expect((init as RequestInit).headers).toBeUndefined();
+    expect((init as RequestInit).signal).toBe(controller.signal);
+    expect((init as RequestInit).body).toBeInstanceOf(FormData);
+    const formData = (init as RequestInit).body as FormData;
+    expect(formData.get("language")).toBe("en");
+    expect(formData.get("file")).toBeInstanceOf(File);
+  });
+
+  it("returns reply audio blobs for speech synthesis", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Blob(["audio"], { type: "audio/wav" }), {
+        status: 200,
+        headers: {
+          "content-type": "audio/wav",
+        },
+      })
+    );
+
+    const blob = await synthesizeSpeech(
+      {
+        input: "Read this aloud",
+        responseFormat: "wav",
+      },
+      {
+        signal: controller.signal,
+      }
+    );
+
+    expect(blob.type).toBe("audio/wav");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/speech/speech",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      })
+    );
+  });
+
+  it("surfaces API error details when speech synthesis fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error:
+            "Speech synthesis failed because min-speech-service at http://127.0.0.1:8790 is unreachable (connection to 127.0.0.1:8790 was refused). Start min-speech-service or update MIN_SPEECH_SERVICE_URL.",
+        }),
+        {
+          status: 503,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+
+    await expect(
+      synthesizeSpeech({
+        input: "Read this aloud",
+      })
+    ).rejects.toThrow(
+      "Speech synthesis failed because min-speech-service at http://127.0.0.1:8790 is unreachable (connection to 127.0.0.1:8790 was refused). Start min-speech-service or update MIN_SPEECH_SERVICE_URL."
+    );
+  });
+});
+
 describe("AG-UI chat streaming", () => {
   it("maps AG-UI SSE events back into the chat UI stream model", async () => {
     const fetchMock = vi
@@ -205,7 +323,7 @@ describe("AG-UI chat streaming", () => {
       }
     );
 
-    expect(events).toHaveLength(4);
+    expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({
       type: "thread",
       thread: {
@@ -214,14 +332,10 @@ describe("AG-UI chat streaming", () => {
     });
     expect(events[1]).toEqual({
       type: "assistant_snapshot",
-      thinkingText: "Plan",
-    });
-    expect(events[2]).toEqual({
-      type: "assistant_snapshot",
       assistantText: "Hello",
       thinkingText: "Plan",
     });
-    expect(events[3]).toMatchObject({
+    expect(events[2]).toMatchObject({
       type: "complete",
       response: {
         thread: {
@@ -320,6 +434,35 @@ describe("AG-UI chat streaming", () => {
 });
 
 describe("helper utilities", () => {
+  it("batches assistant snapshots so the UI can render the latest state once", () => {
+    vi.useFakeTimers();
+
+    const events: Array<Record<string, unknown>> = [];
+    const emitter = __testing.createAssistantSnapshotEmitter((event) => {
+      events.push(event);
+    });
+
+    emitter.queue({ thinkingText: "Plan" });
+    emitter.queue({
+      assistantText: "Hello",
+      thinkingText: "Plan",
+    });
+
+    vi.advanceTimersByTime(__testing.SNAPSHOT_FLUSH_INTERVAL_MS - 1);
+    expect(events).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
+    expect(events).toEqual([
+      {
+        type: "assistant_snapshot",
+        assistantText: "Hello",
+        thinkingText: "Plan",
+      },
+    ]);
+
+    vi.useRealTimers();
+  });
+
   it("summarizes assistant text using the first sentence", () => {
     expect(
       __testing.summarizeAssistantText(
