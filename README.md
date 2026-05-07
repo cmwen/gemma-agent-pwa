@@ -188,6 +188,9 @@ Notes:
 - Chat streaming uses newline-delimited JSON events that match the shared
   `ChatStreamEvent` contract, and the web client validates each parsed event
   before applying it.
+- User prompts are forwarded to the configured LLM backend as plain chat text.
+  LM Studio remains the only configured LLM backend today, while the provider
+  interface stays open for future adapters.
 - Scheduled task cadence is stored with the agent, next-run timestamps are
   computed from the task timezone, and missed runs are resumed with a single
   catch-up execution instead of replaying every missed interval.
@@ -230,6 +233,6 @@ The repository includes a GitHub Actions workflow that publishes `apps/web/dist`
 - Agent prompts are composed from `AGENT.md`, `SOUL.md`, and enabled skill documents in `min-kb-store`.
 - Skills remain file-based `SKILL.md` bundles; executable skills can use the legacy top-level `run.*` convention or a single script inside `scripts/` for compatibility with the open Agent Skills layout.
 - Structured JSON skill-call bodies are forwarded to executable skills through stdin/env and translated into CLI flags like `--field value` for better compatibility with legacy scripts; single-field JSON inputs can also fall back to a positional argument when a skill rejects unknown flags.
-- The API skill loop now strips transient tool-call/planning text from the live chat, supports legacy Agent Skills `<|tool_call|>` blocks, and re-prompts for a plain-language final answer after skill results.
+- The API skill loop now strips transient tool-call/planning text from the live chat, supports legacy Agent Skills `<|tool_call|>` blocks, and can continue across multiple skill iterations before producing the final plain-language answer.
 - Sessions are stored in the canonical `SESSION.md` + `turns/*.md` format.
 - Assistant thinking is stored alongside turn metadata but only shown behind an explicit disclosure in the UI.

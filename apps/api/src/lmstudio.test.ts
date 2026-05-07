@@ -75,6 +75,7 @@ describe("lmstudio parsing", () => {
   });
 
   it("parses plain JSON completion bodies when SSE framing is absent", async () => {
+    const onSnapshot = vi.fn();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -117,7 +118,7 @@ describe("lmstudio parsing", () => {
           },
         ],
         enabledSkills: [],
-        onSnapshot: vi.fn(),
+        onSnapshot,
       })
     ).resolves.toMatchObject({
       assistantText: "Final answer.",
@@ -127,6 +128,9 @@ describe("lmstudio parsing", () => {
         inputTokens: 11,
         outputTokens: 7,
       },
+    });
+    expect(onSnapshot).toHaveBeenCalledWith({
+      assistantText: "Final answer.",
     });
   });
 
@@ -177,6 +181,108 @@ describe("lmstudio parsing", () => {
         onSnapshot: vi.fn(),
       })
     ).rejects.toThrow("Prompt exceeds context length.");
+  });
+
+  it("auto-loads the requested model when LM Studio reports no models loaded", async () => {
+    const onSnapshot = vi.fn();
+    let chatAttemptCount = 0;
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation((input) => {
+        if (input === "http://127.0.0.1:1234/v1/chat/completions") {
+          chatAttemptCount += 1;
+          if (chatAttemptCount === 1) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  error: {
+                    message:
+                      "No models loaded. Please load a model in the developer page or use the 'lms load' command.",
+                  },
+                }),
+                {
+                  status: 400,
+                  headers: {
+                    "content-type": "application/json",
+                  },
+                }
+              )
+            );
+          }
+
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                model: "google/gemma-3-4b",
+                usage: {
+                  prompt_tokens: 11,
+                  completion_tokens: 7,
+                },
+                choices: [
+                  {
+                    message: {
+                      content: "Final answer after loading.",
+                    },
+                  },
+                ],
+              })
+            )
+          );
+        }
+
+        if (input === "http://127.0.0.1:1234/api/v1/models/load") {
+          return Promise.resolve(new Response(null, { status: 200 }));
+        }
+
+        return Promise.reject(new Error(`Unexpected URL: ${String(input)}`));
+      });
+
+    await expect(
+      streamLmStudioChat({
+        model: "google/gemma-3-4b",
+        config: {
+          provider: "lmstudio",
+          model: "google/gemma-3-4b",
+          presetId: "gemma4-balanced",
+          lmStudioEnableThinking: true,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          topP: 0.95,
+          disabledSkills: [],
+        },
+        conversation: [
+          {
+            messageId: "turn-1",
+            sender: "user",
+            createdAt: "2026-04-16T00:00:00.000Z",
+            bodyMarkdown: "Hello",
+            relativePath: "agents/test/history/session-1/turn-1.md",
+          },
+        ],
+        enabledSkills: [],
+        onSnapshot,
+      })
+    ).resolves.toMatchObject({
+      assistantText: "Final answer after loading.",
+      llmStats: {
+        model: "google/gemma-3-4b",
+        requestCount: 1,
+        inputTokens: 11,
+        outputTokens: 7,
+      },
+    });
+
+    expect(chatAttemptCount).toBe(2);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "http://127.0.0.1:1234/api/v1/models/load",
+      expect.objectContaining({
+        body: JSON.stringify({ model: "google/gemma-3-4b" }),
+        method: "POST",
+      })
+    );
+    expect(onSnapshot).toHaveBeenCalledWith({
+      assistantText: "Final answer after loading.",
+    });
   });
 
   it("keeps enabled skill summaries compact enough for smaller context windows", () => {

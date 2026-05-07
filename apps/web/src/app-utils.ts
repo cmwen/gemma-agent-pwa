@@ -451,21 +451,6 @@ export function isScrolledNearBottom({
   return scrollHeight - clientHeight - scrollTop <= threshold;
 }
 
-export function shouldCollapseMobileChatHeader(options: {
-  clientHeight: number;
-  collapseOffset?: number;
-  scrollHeight: number;
-  scrollTop: number;
-  scrollableThreshold?: number;
-}): boolean {
-  const maxScrollTop = options.scrollHeight - options.clientHeight;
-  if (maxScrollTop <= (options.scrollableThreshold ?? 8)) {
-    return false;
-  }
-
-  return options.scrollTop >= (options.collapseOffset ?? 64);
-}
-
 export function isEditableElement(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&

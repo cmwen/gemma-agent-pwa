@@ -218,6 +218,62 @@ describe("listSessions", () => {
     });
   });
 
+  it("defaults persisted runtime config to LM Studio when the provider is omitted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+
+    const thread = await saveChatTurn(workspace, {
+      agentId: "release-planner",
+      sender: "user",
+      title: "Default runtime",
+      bodyMarkdown: "Load the session.",
+      runtimeConfig: {
+        provider: "lmstudio",
+        model: "google/gemma-3-4b",
+        presetId: "gemma4-balanced",
+        lmStudioEnableThinking: true,
+        maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
+        temperature: 0.2,
+        topP: 0.95,
+        disabledSkills: [],
+      },
+    });
+
+    await writeFile(
+      path.join(root, path.dirname(thread.manifestPath), "RUNTIME.json"),
+      `${JSON.stringify(
+        {
+          model: "google/gemma-3-4b",
+          presetId: "gemma4-fast",
+          lmStudioEnableThinking: false,
+          maxCompletionTokens: 2048,
+          contextWindowSize: 8192,
+          temperature: 0.2,
+          topP: 0.92,
+          disabledSkills: ["legacy-skill"],
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const [summary] = await listSessions(workspace, "release-planner");
+    expect(summary?.runtimeConfig).toEqual({
+      provider: "lmstudio",
+      model: "google/gemma-3-4b",
+      presetId: "gemma4-fast",
+      lmStudioEnableThinking: false,
+      maxCompletionTokens: 2048,
+      contextWindowSize: 8192,
+      temperature: 0.2,
+      topP: 0.92,
+      disabledSkills: ["legacy-skill"],
+    });
+  });
+
   it("ignores unsupported legacy providers instead of throwing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
     createdRoots.push(root);

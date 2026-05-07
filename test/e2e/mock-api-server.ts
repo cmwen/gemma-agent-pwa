@@ -69,6 +69,17 @@ const health: HealthStatus = {
 };
 
 let completedSession: ChatSession | undefined;
+let chatRequestCount = 0;
+let lastChatPrompt: string | undefined;
+let lastChatConfig:
+  | {
+      lmStudioEnableThinking: boolean;
+      maxCompletionTokens: number;
+      model: string;
+      presetId: string;
+      provider: string;
+    }
+  | undefined;
 
 const server = createServer(async (request, response) => {
   const method = request.method ?? "GET";
@@ -84,7 +95,18 @@ const server = createServer(async (request, response) => {
 
   if (method === "POST" && url.pathname === "/api/test/reset") {
     completedSession = undefined;
+    chatRequestCount = 0;
+    lastChatPrompt = undefined;
+    lastChatConfig = undefined;
     return writeJson(response, 200, { ok: true });
+  }
+
+  if (method === "GET" && url.pathname === "/api/test/metrics") {
+    return writeJson(response, 200, {
+      chatRequestCount,
+      lastChatConfig: lastChatConfig ?? null,
+      lastChatPrompt: lastChatPrompt ?? null,
+    });
   }
 
   if (method === "GET" && url.pathname === "/api/agents") {
@@ -157,6 +179,7 @@ const server = createServer(async (request, response) => {
   }
 
   if (method === "POST" && url.pathname === `/api/agents/${agent.id}/chat`) {
+    chatRequestCount += 1;
     const input = RunAgentInputSchema.parse(
       JSON.parse(await readRequestBody(request))
     );
@@ -169,6 +192,7 @@ const server = createServer(async (request, response) => {
     const now = new Date().toISOString();
     const sessionId = input.threadId;
     const prompt = extractLatestUserPrompt(input.messages).trim();
+    lastChatPrompt = prompt;
     const title =
       typeof forwardedProps.title === "string" && forwardedProps.title.trim()
         ? forwardedProps.title.trim()
@@ -188,6 +212,17 @@ const server = createServer(async (request, response) => {
       typeof config.maxCompletionTokens === "number"
         ? config.maxCompletionTokens
         : 0;
+    const presetId =
+      typeof config.presetId === "string" ? config.presetId : "gemma4-balanced";
+    const provider =
+      typeof config.provider === "string" ? config.provider : "lmstudio";
+    lastChatConfig = {
+      lmStudioEnableThinking: thinkingEnabled,
+      maxCompletionTokens: maxTokens,
+      model,
+      presetId,
+      provider,
+    };
     const userTurn = {
       messageId: "turn-user-1",
       sender: "user" as const,
@@ -208,10 +243,7 @@ const server = createServer(async (request, response) => {
       runtimeConfig: {
         provider: "lmstudio",
         model,
-        presetId:
-          typeof config.presetId === "string"
-            ? config.presetId
-            : "gemma4-balanced",
+        presetId,
         lmStudioEnableThinking: thinkingEnabled,
         maxCompletionTokens: maxTokens,
         temperature:

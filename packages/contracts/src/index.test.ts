@@ -7,7 +7,9 @@ import {
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_DEEP_PRESET_ID,
   mergeRuntimeConfig,
+  normalizeProviderId,
   normalizeRuntimeConfig,
+  requireConfiguredProvider,
   scheduledTaskCreateSchema,
   scheduledTaskSchema,
 } from "./index";
@@ -73,6 +75,38 @@ describe("runtime config helpers", () => {
       topP: 0.72,
       disabledSkills: [],
     });
+  });
+
+  it("keeps the configured LM Studio provider while still applying preset defaults", () => {
+    expect(
+      applyPresetRuntimeConfigDefaults({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        presetId: GEMMA_BALANCED_PRESET_ID,
+        disabledSkills: [],
+      })
+    ).toMatchObject({
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+      presetId: GEMMA_BALANCED_PRESET_ID,
+      lmStudioEnableThinking: true,
+      maxCompletionTokens: 4096,
+      contextWindowSize: DEFAULT_CONTEXT_WINDOW_SIZE,
+      temperature: 0.2,
+      topP: 0.95,
+      disabledSkills: [],
+    });
+  });
+
+  it("normalizes LM Studio aliases for the active provider", () => {
+    expect(normalizeProviderId(" LM Studio ")).toBe(DEFAULT_PROVIDER);
+    expect(requireConfiguredProvider(" LM Studio ")).toBe(DEFAULT_PROVIDER);
+  });
+
+  it("rejects unsupported providers until another adapter is configured", () => {
+    expect(() => requireConfiguredProvider("future-provider")).toThrow(
+      'Unsupported LLM provider "future-provider". LM Studio is the only configured provider.'
+    );
   });
 });
 

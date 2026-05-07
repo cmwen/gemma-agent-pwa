@@ -379,7 +379,20 @@ async function readChatCompletionStream(
   const decoder = new TextDecoder();
   const completion: LmStudioChatCompletionResponse = {};
   const accumulator = new StreamAccumulator();
+  let lastSnapshotKey = "";
   let buffer = "";
+
+  const emitSnapshot = (snapshot: StreamSnapshot | undefined) => {
+    if (!snapshot?.assistantText && !snapshot?.thinkingText) {
+      return;
+    }
+    const snapshotKey = JSON.stringify(snapshot);
+    if (snapshotKey === lastSnapshotKey) {
+      return;
+    }
+    lastSnapshotKey = snapshotKey;
+    onSnapshot(snapshot);
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -397,9 +410,7 @@ async function readChatCompletionStream(
       if (chunk && chunk !== "[DONE]") {
         mergeCompletionChunk(completion, chunk);
         const snapshot = accumulator.consumeChunk(chunk);
-        if (snapshot) {
-          onSnapshot(snapshot);
-        }
+        emitSnapshot(snapshot);
       }
       nextBlock = extractNextStreamBlock(buffer);
     }
@@ -413,9 +424,7 @@ async function readChatCompletionStream(
       if (trailing && trailing !== "[DONE]") {
         mergeCompletionChunk(completion, trailing);
         const snapshot = accumulator.consumeChunk(trailing);
-        if (snapshot) {
-          onSnapshot(snapshot);
-        }
+        emitSnapshot(snapshot);
       }
       break;
     }
@@ -425,6 +434,7 @@ async function readChatCompletionStream(
     extractMessageSections(completion),
     accumulator.getSnapshot(),
   ]);
+  emitSnapshot(finalSnapshot);
   if (finalSnapshot.assistantText || finalSnapshot.thinkingText) {
     completion.choices = [
       {
@@ -800,7 +810,9 @@ function shouldRetryAfterModelLoad(status: number, body: string): boolean {
   if (status < 400 || status >= 500) {
     return false;
   }
-  return /not loaded|load the model|unknown model|failed to load/i.test(body);
+  return /no models loaded|not loaded|load the model|unknown model|failed to load/i.test(
+    body
+  );
 }
 
 function formatChatError(status: number, body: string): string {

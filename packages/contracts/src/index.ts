@@ -5,6 +5,37 @@ export const GEMMA_BALANCED_PRESET_ID = "gemma4-balanced";
 export const GEMMA_DEEP_PRESET_ID = "gemma4-deep";
 export const DEFAULT_PROVIDER = "lmstudio";
 export const DEFAULT_MODEL = "google/gemma-3-4b";
+export const CONFIGURED_PROVIDER_IDS = [DEFAULT_PROVIDER] as const;
+
+export function normalizeProviderId(provider?: string): string | undefined {
+  const trimmed = provider?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  return normalized.replace(/\s+/g, "") === DEFAULT_PROVIDER
+    ? DEFAULT_PROVIDER
+    : normalized;
+}
+
+export function isConfiguredProvider(provider?: string): boolean {
+  return (
+    (normalizeProviderId(provider) ?? DEFAULT_PROVIDER) === DEFAULT_PROVIDER
+  );
+}
+
+export function requireConfiguredProvider(
+  provider?: string
+): typeof DEFAULT_PROVIDER {
+  const normalizedProvider = normalizeProviderId(provider) ?? DEFAULT_PROVIDER;
+  if (normalizedProvider !== DEFAULT_PROVIDER) {
+    throw new Error(
+      `Unsupported LLM provider "${normalizedProvider}". LM Studio is the only configured provider.`
+    );
+  }
+  return DEFAULT_PROVIDER;
+}
 
 export const runtimePresetSchema = z.object({
   id: z.string().min(1),
@@ -74,7 +105,7 @@ export const skillDescriptorSchema = z.object({
 export type SkillDescriptor = z.infer<typeof skillDescriptorSchema>;
 
 export const chatRuntimeConfigSchema = z.object({
-  provider: z.literal(DEFAULT_PROVIDER).default(DEFAULT_PROVIDER),
+  provider: z.string().trim().min(1).default(DEFAULT_PROVIDER),
   model: z.string().min(1).default(DEFAULT_MODEL),
   presetId: z.string().min(1).default(GEMMA_BALANCED_PRESET_ID),
   lmStudioEnableThinking: z.boolean().optional(),
@@ -128,7 +159,7 @@ export function applyPresetRuntimeConfigDefaults(
   const preset = getPresetById(config.presetId);
 
   return chatRuntimeConfigSchema.parse({
-    provider: DEFAULT_PROVIDER,
+    provider: config.provider,
     model: config.model,
     presetId: config.presetId,
     lmStudioEnableThinking:

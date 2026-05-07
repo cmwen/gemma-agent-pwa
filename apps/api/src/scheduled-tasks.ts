@@ -27,7 +27,7 @@ import {
 import type { Hono } from "hono";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
-import { listLmStudioModels } from "./lmstudio.js";
+import { listAvailableModels } from "./llm-provider.js";
 
 const RUN_HISTORY_LIMIT = 20;
 const SCHEDULER_MIN_INTERVAL_MS = 30_000;
@@ -393,7 +393,7 @@ async function executeScheduledChat(
   startedAt: string
 ): Promise<{ assistantSummary: string; sessionId: string }> {
   const agent = await requireAgent(workspace, task.agentId);
-  const models = await listLmStudioModels();
+  const models = await listAvailableModels();
   const runtimeConfig = selectScheduledTaskRuntimeConfig(
     agent.runtimeConfig,
     models

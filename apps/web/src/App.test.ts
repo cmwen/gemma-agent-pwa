@@ -40,7 +40,6 @@ import {
   isScrolledNearBottom,
   markdownToPlainText,
   shouldBlurActiveEditableElementOnPointerDown,
-  shouldCollapseMobileChatHeader,
   shouldSendCompletionNotification,
 } from "./app-utils";
 
@@ -547,38 +546,6 @@ describe("isScrolledNearBottom", () => {
         clientHeight: 600,
         scrollHeight: 1200,
         scrollTop: 420,
-      })
-    ).toBe(false);
-  });
-});
-
-describe("shouldCollapseMobileChatHeader", () => {
-  it("stays expanded when the timeline cannot scroll yet", () => {
-    expect(
-      shouldCollapseMobileChatHeader({
-        clientHeight: 600,
-        scrollHeight: 600,
-        scrollTop: 220,
-      })
-    ).toBe(false);
-  });
-
-  it("collapses after the reader scrolls down a long mobile timeline", () => {
-    expect(
-      shouldCollapseMobileChatHeader({
-        clientHeight: 600,
-        scrollHeight: 1400,
-        scrollTop: 220,
-      })
-    ).toBe(true);
-  });
-
-  it("restores the header near the top of the timeline", () => {
-    expect(
-      shouldCollapseMobileChatHeader({
-        clientHeight: 600,
-        scrollHeight: 1400,
-        scrollTop: 0,
       })
     ).toBe(false);
   });

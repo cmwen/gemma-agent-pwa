@@ -56,7 +56,6 @@ import {
   markdownToPlainText,
   type StreamSkillActivity,
   shouldBlurActiveEditableElementOnPointerDown,
-  shouldCollapseMobileChatHeader,
   shouldSendCompletionNotification,
 } from "./app-utils";
 import {
@@ -146,7 +145,6 @@ const MIN_CHAT_PANEL_WIDTH = 420;
 const RESIZE_STEP = 24;
 const HEALTH_QUERY_STALE_TIME_MS = 30_000;
 const MODELS_QUERY_STALE_TIME_MS = 5 * 60_000;
-const MOBILE_CHAT_HEADER_COLLAPSE_OFFSET_PX = 64;
 const SPEECH_QUERY_STALE_TIME_MS = 5 * 60_000;
 const SPEECH_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const SPEECH_SYNTHESIS_TIMEOUT_MS = 30_000;
@@ -239,8 +237,6 @@ export default function App() {
   const [isDocumentHidden, setDocumentHidden] = useState(
     typeof document === "undefined" ? false : document.hidden
   );
-  const [isMobileChatHeaderCollapsed, setIsMobileChatHeaderCollapsed] =
-    useState(false);
   const [scheduleDraft, setScheduleDraft] = useState<ScheduleDraftState>(
     createScheduleDraftState()
   );
@@ -264,8 +260,6 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const appShellRef = useRef<HTMLDivElement | null>(null);
   const timelineRef = useRef<HTMLDivElement | null>(null);
-  const suppressMobileTimelineScrollSyncRef = useRef(false);
-  const newChatButtonRef = useRef<HTMLButtonElement | null>(null);
   const recentHistoryButtonRef = useRef<HTMLButtonElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatDetailsToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -284,7 +278,6 @@ export default function App() {
   const wasDocumentHiddenRef = useRef(isDocumentHidden);
   const wasOnlineRef = useRef(isOnline);
   const forceAutoScrollTimelineRef = useRef(true);
-  const timelineSyncKeyRef = useRef("");
   const handleSendRef = useRef<(promptOverride?: string) => Promise<void>>(
     async () => {}
   );
@@ -645,6 +638,15 @@ export default function App() {
     speechReady,
     speechSupported,
   });
+  const handsFreeToggleLabel = `Hands-free ${handsFreeVoiceTurns ? "on" : "off"}`;
+  const autoPlayToggleLabel = `Auto-play ${autoPlayReplies ? "on" : "off"}`;
+  const voiceTurnStatusClassName = `status-chip ${
+    voiceTurnStatus.tone === "generating"
+      ? "status-generating"
+      : voiceTurnStatus.tone === "offline"
+        ? "status-offline"
+        : "status-ready"
+  }`;
 
   const canSend =
     Boolean(selectedAgentId) &&
@@ -667,7 +669,11 @@ export default function App() {
       requestAnimationFrame(() => {
         switch (section) {
           case "agents":
-            newChatButtonRef.current?.focus();
+            document
+              .querySelector<HTMLElement>(
+                '#app-section-agents [data-roving-focus="true"]:not(:disabled)'
+              )
+              ?.focus();
             break;
           case "history":
             recentHistoryButtonRef.current?.focus();
@@ -684,26 +690,25 @@ export default function App() {
     [modelDetailsOpen, setModelDetailsOpen]
   );
 
-  const syncMobileChatHeaderCollapsed = useCallback(() => {
-    const timeline = timelineRef.current;
-    if (
-      !timeline ||
-      typeof window === "undefined" ||
-      window.innerWidth >= DESKTOP_BREAKPOINT
-    ) {
-      setIsMobileChatHeaderCollapsed(false);
-      return;
-    }
-
-    setIsMobileChatHeaderCollapsed(
-      shouldCollapseMobileChatHeader({
-        clientHeight: timeline.clientHeight,
-        collapseOffset: MOBILE_CHAT_HEADER_COLLAPSE_OFFSET_PX,
-        scrollHeight: timeline.scrollHeight,
-        scrollTop: timeline.scrollTop,
-      })
-    );
-  }, []);
+  const focusComposerFromShortcut = useCallback(
+    (shortcutKey?: string) => {
+      focusSection("chat");
+      if (shortcutKey !== "/" || draft.length > 0) {
+        return;
+      }
+      setDraft(draftKey, shortcutKey);
+      requestAnimationFrame(() => {
+        const composer = composerInputRef.current;
+        if (!composer) {
+          return;
+        }
+        composer.focus();
+        const cursorPosition = composer.value.length;
+        composer.setSelectionRange(cursorPosition, cursorPosition);
+      });
+    },
+    [draft.length, draftKey, focusSection, setDraft]
+  );
 
   const stopSpeechPlayback = useCallback(() => {
     playbackAbortRef.current?.abort();
@@ -1288,11 +1293,11 @@ export default function App() {
   }, [healthQuery, isDocumentHidden, isOnline]);
 
   useEffect(() => {
+    void timelineSyncKey;
     const timeline = timelineRef.current;
     if (!timeline) {
       return;
     }
-    timelineSyncKeyRef.current = timelineSyncKey;
     const previousMetrics = timelineMetricsRef.current;
     const shouldFollowLatest =
       forceAutoScrollTimelineRef.current ||
@@ -1304,11 +1309,7 @@ export default function App() {
       });
 
     if (shouldFollowLatest) {
-      suppressMobileTimelineScrollSyncRef.current = true;
       timeline.scrollTop = timeline.scrollHeight;
-      setIsMobileChatHeaderCollapsed(false);
-    } else {
-      syncMobileChatHeaderCollapsed();
     }
 
     forceAutoScrollTimelineRef.current = false;
@@ -1316,31 +1317,7 @@ export default function App() {
       clientHeight: timeline.clientHeight,
       scrollHeight: timeline.scrollHeight,
     };
-  }, [syncMobileChatHeaderCollapsed, timelineSyncKey]);
-
-  useEffect(() => {
-    const timeline = timelineRef.current;
-    if (!timeline) {
-      return;
-    }
-
-    function handleTimelineScroll() {
-      if (suppressMobileTimelineScrollSyncRef.current) {
-        suppressMobileTimelineScrollSyncRef.current = false;
-        return;
-      }
-      syncMobileChatHeaderCollapsed();
-    }
-
-    timeline.addEventListener("scroll", handleTimelineScroll, {
-      passive: true,
-    });
-    window.addEventListener("resize", syncMobileChatHeaderCollapsed);
-    return () => {
-      timeline.removeEventListener("scroll", handleTimelineScroll);
-      window.removeEventListener("resize", syncMobileChatHeaderCollapsed);
-    };
-  }, [syncMobileChatHeaderCollapsed]);
+  }, [timelineSyncKey]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode;
@@ -2077,7 +2054,7 @@ export default function App() {
         event.key === "/"
       ) {
         event.preventDefault();
-        focusSection("chat");
+        focusComposerFromShortcut(event.key);
         return;
       }
       if (event.metaKey || event.ctrlKey || event.shiftKey || !event.altKey) {
@@ -2096,6 +2073,7 @@ export default function App() {
   }, [
     closeCommandPalette,
     closeHelpDialog,
+    focusComposerFromShortcut,
     focusSection,
     isCommandPaletteOpen,
     isHelpOpen,
@@ -2510,14 +2488,6 @@ export default function App() {
             <p className="eyebrow">Agents</p>
             <h1>Gemma Agent</h1>
           </div>
-          <button
-            className="ghost-button"
-            onClick={handleNewChat}
-            ref={newChatButtonRef}
-            type="button"
-          >
-            New chat
-          </button>
         </div>
         <div className="agent-list" data-mobile-scroll-region="true">
           {agentsQuery.data?.map((agent) => (
@@ -2681,24 +2651,40 @@ export default function App() {
         )}
         id="app-section-chat"
       >
-        <header
-          className={`chat-header ${
-            isMobileChatHeaderCollapsed ? "chat-header-mobile-collapsed" : ""
-          }`}
-        >
-          <div>
+        <header className="chat-header">
+          <div className="chat-header-summary">
             <p className="eyebrow">Local Gemma chat</p>
             <h2>
               {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
             </h2>
-            <p className="support-text">
-              {threadDeleted
-                ? "Read-only · moved to Trash"
-                : streaming.sending
-                  ? "Streaming live"
-                  : "Streaming ready"}{" "}
-              · {modelTone}
-            </p>
+            <div className="chat-header-meta">
+              <p className="support-text chat-header-status">
+                {threadDeleted
+                  ? "Read-only · moved to Trash"
+                  : streaming.sending
+                    ? "Streaming live"
+                    : "Streaming ready"}{" "}
+                · {modelTone}
+              </p>
+              <div
+                aria-live="polite"
+                className="voice-strip voice-strip-header"
+              >
+                <span className={voiceTurnStatusClassName}>
+                  {voiceTurnStatus.label}
+                </span>
+                <button
+                  aria-pressed={handsFreeVoiceTurns}
+                  className={`ghost-button voice-toggle ${
+                    handsFreeVoiceTurns ? "is-active" : ""
+                  }`}
+                  onClick={() => setHandsFreeVoiceTurns(!handsFreeVoiceTurns)}
+                  type="button"
+                >
+                  {handsFreeToggleLabel}
+                </button>
+              </div>
+            </div>
             <div className="chat-overview">
               <span className="chip">
                 {selectedModel?.displayName ??
@@ -2706,6 +2692,13 @@ export default function App() {
                   "No model"}
               </span>
               <span className="chip">{activePreset.title}</span>
+              {handsFreeVoiceTurns ? (
+                <span
+                  className={`${voiceTurnStatusClassName} chat-overview-hands-free-chip`}
+                >
+                  Hands-free on
+                </span>
+              ) : null}
               <span className="chip">
                 {historyView === "active"
                   ? `${sessionsQuery.data?.length ?? 0} recent chats`
@@ -2741,6 +2734,13 @@ export default function App() {
                   Think
                 </button>
               </fieldset>
+              <button
+                className="ghost-button"
+                onClick={handleNewChat}
+                type="button"
+              >
+                New chat
+              </button>
               <button
                 aria-controls="app-section-details"
                 aria-expanded={modelDetailsOpen}
@@ -2835,7 +2835,7 @@ export default function App() {
                 onClick={() => setHandsFreeVoiceTurns(!handsFreeVoiceTurns)}
                 type="button"
               >
-                Hands-free {handsFreeVoiceTurns ? "on" : "off"}
+                {handsFreeToggleLabel}
               </button>
               <button
                 aria-pressed={autoPlayReplies}
@@ -2845,7 +2845,7 @@ export default function App() {
                 onClick={() => setAutoPlayReplies(!autoPlayReplies)}
                 type="button"
               >
-                Auto-play {autoPlayReplies ? "on" : "off"}
+                {autoPlayToggleLabel}
               </button>
             </div>
           </div>

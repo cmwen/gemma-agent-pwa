@@ -17,14 +17,14 @@ import {
   buildSkillExecutionDebugLog,
   logChatDebugMessage,
 } from "./chat-debug.js";
-import { streamLmStudioChat } from "./lmstudio.js";
+import { streamProviderChat } from "./llm-provider.js";
 
 const MAX_SKILL_LOOP_ITERATIONS = 5;
 const FINALIZE_AFTER_SKILLS_INSTRUCTION =
-  "Use the skill result above to answer the user's latest request directly. Do not include reasoning traces, planning notes, or raw tool-call markup in the visible reply.";
+  "Use the skill result above to continue solving the user's latest request. If you have enough information, answer the user directly in plain language. If you still need another executable skill, emit the next skill_call block(s) only. Do not include reasoning traces, planning notes, or raw tool-call markup in the visible reply.";
 
-type StreamChatResult = Awaited<ReturnType<typeof streamLmStudioChat>>;
-type StreamChat = typeof streamLmStudioChat;
+type StreamChatResult = Awaited<ReturnType<typeof streamProviderChat>>;
+type StreamChat = typeof streamProviderChat;
 type ExecuteSkill = typeof executeSkillScript;
 
 interface ChatLoopOptions {
@@ -54,7 +54,7 @@ interface ChatLoopResult {
 export async function runChatLoop(
   options: ChatLoopOptions
 ): Promise<ChatLoopResult> {
-  const streamChat = options.streamChat ?? streamLmStudioChat;
+  const streamChat = options.streamChat ?? streamProviderChat;
   const executeSkill = options.executeSkill ?? executeSkillScript;
   const conversationTurns = [...options.conversationTurns];
   let finalAssistantText = "";

@@ -62,7 +62,7 @@ export function buildExecutableSkillInstructions(
     "The system will execute the skill and return its output.",
     "When a skill needs a single free-form or positional input such as a search query, topic, or file path, pass plain text inside the skill_call body instead of wrapping it in JSON.",
     "Use a JSON object only when you need named flags or multiple named arguments. The runtime also forwards top-level JSON fields as CLI flags such as --field value for legacy scripts.",
-    "After you receive skill results, answer the user directly in plain language. Do not expose chain-of-thought, reasoning traces, or raw tool-call markup.",
+    "After you receive skill results, continue working toward the user's request. If the result is sufficient, answer the user directly in plain language. If you still need another executable skill, emit the next skill_call block(s) only. Do not expose chain-of-thought, reasoning traces, or raw tool-call markup.",
     "Only call skills that are listed below as executable. Treat every other skill as reference-only context.",
     "",
     "### Executable skills",

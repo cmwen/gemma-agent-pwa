@@ -370,6 +370,97 @@ describe("AG-UI chat streaming", () => {
     });
   });
 
+  it("forwards the active LM Studio runtime config with chat requests", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        createStreamResponse([
+          'data: {"type":"RUN_STARTED","threadId":"session-1","runId":"run-1"}\n\n',
+          'data: {"type":"RUN_FINISHED","threadId":"session-1","runId":"run-1","outcome":{"type":"success"}}\n\n',
+        ])
+      );
+
+    await streamChat(
+      "release-planner",
+      buildChatRequest({
+        config: {
+          provider: "lmstudio",
+          model: "google/gemma-4b-it",
+          presetId: "gemma4-fast",
+          lmStudioEnableThinking: false,
+        },
+        sessionId: "session-1",
+      }),
+      {
+        onEvent: vi.fn(),
+        thread: buildThread(),
+      }
+    );
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body.forwardedProps).toMatchObject({
+      config: {
+        provider: "lmstudio",
+        model: "google/gemma-4b-it",
+        presetId: "gemma4-fast",
+        lmStudioEnableThinking: false,
+      },
+      title: "Release planning",
+    });
+  });
+
+  it("forwards prompts unchanged through the LM Studio golden path", async () => {
+    const prompt = "Summarize the mobile release plan.";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        createStreamResponse([
+          'data: {"type":"RUN_STARTED","threadId":"session-1","runId":"run-1"}\n\n',
+          'data: {"type":"RUN_FINISHED","threadId":"session-1","runId":"run-1","outcome":{"type":"success"}}\n\n',
+        ])
+      );
+    const events: Array<Record<string, unknown>> = [];
+
+    await streamChat(
+      "release-planner",
+      buildChatRequest({
+        prompt,
+        sessionId: "session-1",
+      }),
+      {
+        onEvent: (event) => events.push(event),
+        thread: buildThread(),
+      }
+    );
+
+    expect(events[0]).toMatchObject({
+      type: "thread",
+      thread: {
+        turns: expect.arrayContaining([
+          expect.objectContaining({
+            bodyMarkdown: prompt,
+            sender: "user",
+          }),
+        ]),
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body.messages).toMatchObject([
+      { id: "turn-1", role: "user", content: "Outline the release checklist." },
+      { id: "turn-2", role: "assistant", content: "Start with tests." },
+      { role: "user", content: prompt },
+    ]);
+  });
+
   it("surfaces AG-UI run errors in the existing error event shape", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       createStreamResponse([

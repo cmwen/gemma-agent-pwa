@@ -36,7 +36,9 @@ test("streams quick replies cleanly on mobile without horizontal overflow", asyn
   await expect(
     page.getByRole("heading", { name: "Release planner" })
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Chat" })).toBeVisible();
+  await expect(
+    page.locator(".mobile-nav").getByRole("button", { name: "Chat" })
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Fast" }).click();
   const composer = page.getByRole("textbox", { name: "Message composer" });
@@ -188,7 +190,7 @@ test("keeps the mobile timeline scroll position when reading a long streamed rep
   expect(maxScrollTop).toBeGreaterThan(400);
 });
 
-test("collapses the mobile chat header on scroll and restores it near the top", async ({
+test("keeps the mobile chat header visible while scrolling on mobile", async ({
   page,
 }) => {
   await page.goto("/");
@@ -225,13 +227,14 @@ test("collapses the mobile chat header on scroll and restores it near the top", 
     element.scrollTop = 220;
   });
 
+  await expect(chatHeader).toBeVisible();
   await expect
     .poll(() =>
       chatHeader.evaluate((element) =>
         Math.round(element.getBoundingClientRect().height)
       )
     )
-    .toBeLessThanOrEqual(8);
+    .toBeGreaterThanOrEqual(expandedHeaderHeight - 8);
   await expect(page.locator(".mobile-top-chrome")).toBeVisible();
 
   const composerInset = await page
@@ -308,12 +311,16 @@ test("renders skill calls as expandable sections instead of raw markup", async (
 
 test("uses the thinking toggle without overwriting the selected preset budget", async ({
   page,
+  request,
 }) => {
   await page.goto("/");
 
   await page.getByRole("button", { name: "Show details" }).click();
   await page.getByLabel("Gemma preset").selectOption("gemma4-deep");
-  await page.getByRole("button", { name: "Chat" }).click();
+  await page
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "Chat" })
+    .click();
   await page.getByRole("button", { name: "Fast" }).click();
 
   const composer = page.getByRole("textbox", { name: "Message composer" });
@@ -335,6 +342,72 @@ test("uses the thinking toggle without overwriting the selected preset budget", 
   ).toBeVisible();
   await expect(page.getByText("Request queued")).toBeVisible();
   await expect(page.getByText("Response saved")).toBeVisible();
+
+  const metricsResponse = await request.get(
+    `${mockApiBaseUrl}/api/test/metrics`
+  );
+  expect(metricsResponse.ok()).toBe(true);
+  const metrics = (await metricsResponse.json()) as {
+    lastChatConfig: {
+      lmStudioEnableThinking: boolean;
+      maxCompletionTokens: number;
+      model: string;
+      presetId: string;
+      provider: string;
+    } | null;
+  };
+  expect(metrics.lastChatConfig).toEqual({
+    provider: "lmstudio",
+    model: "google/gemma-4b-it",
+    presetId: "gemma4-deep",
+    lmStudioEnableThinking: false,
+    maxCompletionTokens: 8192,
+  });
+});
+
+test("forwards prompts through the LM Studio golden path", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/");
+
+  const prompt = "Summarize the mobile release plan.";
+  const composer = page.getByRole("textbox", { name: "Message composer" });
+  await composer.pressSequentially(prompt);
+  const sendButton = page.getByRole("button", { name: "Send" });
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+
+  const assistantCard = page.locator(".message-card.assistant").last();
+  await expect(
+    assistantCard.getByText("Streaming reply for google/gemma-4b-it")
+  ).toBeVisible();
+  await expect(assistantCard.getByText("mobile: wrapped")).toBeVisible();
+
+  const metricsResponse = await request.get(
+    `${mockApiBaseUrl}/api/test/metrics`
+  );
+  expect(metricsResponse.ok()).toBe(true);
+  const metrics = (await metricsResponse.json()) as {
+    chatRequestCount: number;
+    lastChatConfig: {
+      lmStudioEnableThinking: boolean;
+      maxCompletionTokens: number;
+      model: string;
+      presetId: string;
+      provider: string;
+    } | null;
+    lastChatPrompt: string | null;
+  };
+  expect(metrics.chatRequestCount).toBe(1);
+  expect(metrics.lastChatPrompt).toBe(prompt);
+  expect(metrics.lastChatConfig).toEqual({
+    provider: "lmstudio",
+    model: "google/gemma-4b-it",
+    presetId: "gemma4-balanced",
+    lmStudioEnableThinking: true,
+    maxCompletionTokens: 4096,
+  });
 });
 
 test("persists theme changes and supports keyboard shortcuts on mobile", async ({
@@ -407,14 +480,21 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
     page.getByRole("heading", { name: "Model details" })
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Chat" }).focus();
+  await page
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "Chat" })
+    .focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("button", { name: "Agents" })).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+  await expect(
+    page
+      .locator("#app-section-agents")
+      .getByRole("heading", { name: "Gemma Agent" })
+  ).toBeVisible();
 });
 
-test("hides the details panel when closed and supports soft-deleting chat history", async ({
+test("hides the details panel when closed and supports moving chat history to Trash", async ({
   page,
 }) => {
   await page.goto("/");
@@ -471,21 +551,13 @@ test("hides the details panel when closed and supports soft-deleting chat histor
     .getByRole("button", { name: "Move to Trash" })
     .click();
 
-  await expect(
-    page.getByText("Start a new thread for this agent to create local history.")
-  ).toBeVisible();
-
-  await page.getByRole("button", { name: "Trash" }).click();
   await page
-    .locator("#app-section-history .session-card-button")
-    .first()
+    .locator(".mobile-nav")
+    .getByRole("button", { name: "History" })
     .click();
   await expect(
-    page.locator("#app-section-chat").getByRole("button", { name: "Restore" })
-  ).toBeVisible();
-  await expect(
     page
-      .locator("#app-section-chat")
-      .getByRole("button", { name: "Delete forever" })
+      .locator("#app-section-history")
+      .getByText("Start a new thread for this agent to create local history.")
   ).toBeVisible();
 });

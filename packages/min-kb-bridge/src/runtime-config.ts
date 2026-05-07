@@ -2,18 +2,21 @@ import type { ChatRuntimeConfig } from "@gemma-agent-pwa/contracts";
 import {
   chatRuntimeConfigSchema,
   DEFAULT_PROVIDER,
+  isConfiguredProvider,
+  normalizeProviderId,
 } from "@gemma-agent-pwa/contracts";
 
 export function parsePersistedRuntimeConfig(
   rawConfig: string
 ): ChatRuntimeConfig | undefined {
   const parsed = parseRuntimeConfigObject(JSON.parse(rawConfig));
-  const provider = normalizeProvider(
+  const normalizedProvider = normalizeProviderId(
     readOptionalTrimmedString(parsed.provider)
   );
-  if (provider !== DEFAULT_PROVIDER) {
+  if (!isConfiguredProvider(normalizedProvider)) {
     return undefined;
   }
+  const provider = normalizedProvider ?? DEFAULT_PROVIDER;
 
   return chatRuntimeConfigSchema.parse({
     model: readOptionalTrimmedString(parsed.model),
@@ -38,14 +41,6 @@ export function parsePersistedRuntimeConfig(
     ),
     provider,
   });
-}
-
-function normalizeProvider(provider?: string): string | undefined {
-  if (!provider) {
-    return undefined;
-  }
-
-  return provider.replace(/\s+/g, "").trim().toLowerCase();
 }
 
 function parseRuntimeConfigObject(value: unknown): Record<string, unknown> {

@@ -3,10 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSkillScript, parseSkillCalls } from "./agent-skills.js";
-import { runChatLoop } from "./chat-loop.js";
-import { __testing } from "./lmstudio.js";
+import { __testing as chatLoopTesting, runChatLoop } from "./chat-loop.js";
+import { __testing as lmstudioTesting } from "./lmstudio.js";
 
-const { buildSystemPrompt } = __testing;
+const { FINALIZE_AFTER_SKILLS_INSTRUCTION } = chatLoopTesting;
+const { buildSystemPrompt } = lmstudioTesting;
 
 describe("agentic skill loop", () => {
   let tmpDir: string;
@@ -242,6 +243,97 @@ I'll have the answer soon.`;
 });
 
 describe("runChatLoop", () => {
+  it("returns the first LM Studio reply unchanged when no skill call is emitted", async () => {
+    const streamChat = vi.fn().mockImplementation(async (input) => {
+      input.onSnapshot({
+        assistantText: "Release checklist ready.",
+        thinkingText: "Checking the saved milestones before answering.",
+      });
+      return {
+        assistantText: "Release checklist ready.",
+        thinkingText: "Checking the saved milestones before answering.",
+        llmStats: {
+          recordedAt: "2026-05-07T00:00:00.000Z",
+          model: "google/gemma-4b-it",
+          requestCount: 1,
+          inputTokens: 32,
+          outputTokens: 7,
+          durationMs: 180,
+        },
+      };
+    });
+    const emitEvent = vi.fn();
+
+    const result = await runChatLoop({
+      agentId: "release-planner",
+      agentPrompt: "Be helpful.",
+      config: {
+        provider: "lmstudio",
+        model: "google/gemma-4b-it",
+        presetId: "gemma4-balanced",
+        lmStudioEnableThinking: true,
+        maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
+        temperature: 0.2,
+        topP: 0.95,
+        disabledSkills: [],
+      },
+      conversationTurns: [
+        {
+          messageId: "turn-1",
+          sender: "user",
+          createdAt: "2026-05-07T00:00:00.000Z",
+          bodyMarkdown: "Outline the release checklist.",
+          relativePath: "in-flight",
+        },
+      ],
+      enabledSkills: [],
+      sessionId: "session-golden",
+      emitEvent,
+      streamChat,
+    });
+
+    expect(result).toMatchObject({
+      assistantText: "Release checklist ready.",
+      thinkingText: "Checking the saved milestones before answering.",
+      llmStats: {
+        requestCount: 1,
+        inputTokens: 32,
+        outputTokens: 7,
+        durationMs: 180,
+      },
+    });
+    expect(result.conversationTurns).toEqual([
+      expect.objectContaining({
+        sender: "user",
+        bodyMarkdown: "Outline the release checklist.",
+      }),
+    ]);
+    expect(streamChat).toHaveBeenCalledTimes(1);
+    expect(streamChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: "lmstudio",
+          model: "google/gemma-4b-it",
+        }),
+        conversation: [
+          expect.objectContaining({
+            sender: "user",
+            bodyMarkdown: "Outline the release checklist.",
+          }),
+        ],
+      })
+    );
+    expect(emitEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "skill_call" })
+    );
+    expect(emitEvent).toHaveBeenCalledWith({
+      type: "assistant_snapshot",
+      assistantText: "Release checklist ready.",
+      thinkingText: "Checking the saved milestones before answering.",
+    });
+  });
+
   it("executes requested skills and feeds the result back into the next iteration", async () => {
     const streamChat = vi
       .fn()
@@ -486,6 +578,128 @@ describe("runChatLoop", () => {
       '{"query":"TODO"}'
     );
   });
+
+  it("continues across multiple skill iterations before finalizing", async () => {
+    const streamChat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistantText:
+          '<skill_call name="search-store">release checklist</skill_call>',
+        llmStats: {
+          recordedAt: "2026-04-27T00:00:00.000Z",
+          model: "google/gemma-3-4b",
+          requestCount: 1,
+          inputTokens: 10,
+          outputTokens: 4,
+          durationMs: 100,
+        },
+      })
+      .mockResolvedValueOnce({
+        assistantText:
+          '<skill_call name="read-file">docs/release-notes.md</skill_call>',
+        llmStats: {
+          recordedAt: "2026-04-27T00:00:00.000Z",
+          model: "google/gemma-3-4b",
+          requestCount: 1,
+          inputTokens: 12,
+          outputTokens: 4,
+          durationMs: 110,
+        },
+      })
+      .mockResolvedValueOnce({
+        assistantText: "The release notes are ready.",
+        llmStats: {
+          recordedAt: "2026-04-27T00:00:00.000Z",
+          model: "google/gemma-3-4b",
+          requestCount: 1,
+          inputTokens: 14,
+          outputTokens: 5,
+          durationMs: 120,
+        },
+      });
+    const executeSkill = vi
+      .fn()
+      .mockImplementation(async (skill: { name: string }, input: string) => ({
+        skillName: skill.name,
+        output:
+          skill.name === "search-store"
+            ? `Found file for ${input}`
+            : `Contents of ${input}`,
+        exitCode: 0,
+      }));
+
+    const result = await runChatLoop({
+      agentId: "release-planner",
+      agentPrompt: "Be helpful.",
+      config: {
+        provider: "lmstudio",
+        model: "google/gemma-3-4b",
+        presetId: "gemma4-balanced",
+        lmStudioEnableThinking: true,
+        maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
+        temperature: 0.2,
+        topP: 0.95,
+        disabledSkills: [],
+      },
+      conversationTurns: [
+        {
+          messageId: "turn-1",
+          sender: "user",
+          createdAt: "2026-04-27T00:00:00.000Z",
+          bodyMarkdown: "Prepare the release notes.",
+          relativePath: "in-flight",
+        },
+      ],
+      enabledSkills: [
+        {
+          name: "search-store",
+          description: "Searches notes.",
+          scope: "agent-local",
+          path: "/fake/SKILL.md",
+          sourceRoot: "/fake",
+          hasScript: true,
+          scriptPath: "/fake/run.sh",
+          content: "Use this skill to search stored notes.",
+        },
+        {
+          name: "read-file",
+          description: "Reads files.",
+          scope: "agent-local",
+          path: "/fake/SKILL.md",
+          sourceRoot: "/fake",
+          hasScript: true,
+          scriptPath: "/fake/run.sh",
+          content: "Use this skill to read files.",
+        },
+      ],
+      sessionId: "session-multi",
+      streamChat,
+      executeSkill,
+    });
+
+    expect(result.assistantText).toBe("The release notes are ready.");
+    expect(result.llmStats.requestCount).toBe(3);
+    expect(executeSkill).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ name: "search-store" }),
+      "release checklist"
+    );
+    expect(executeSkill).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ name: "read-file" }),
+      "docs/release-notes.md"
+    );
+    expect(result.conversationTurns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sender: "system",
+          bodyMarkdown: FINALIZE_AFTER_SKILLS_INSTRUCTION,
+        }),
+      ])
+    );
+    expect(streamChat).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("system prompt with executable skills", () => {
@@ -517,7 +731,12 @@ describe("system prompt with executable skills", () => {
     expect(prompt).toContain(
       "Use a JSON object only when you need named flags or multiple named arguments."
     );
-    expect(prompt).toContain("answer the user directly in plain language");
+    expect(prompt).toContain(
+      "If the result is sufficient, answer the user directly in plain language."
+    );
+    expect(prompt).toContain(
+      "If you still need another executable skill, emit the next skill_call block(s) only."
+    );
     expect(prompt).toContain(
       'Use a JSON object like {"expression":"2+2"} when you need named arguments.'
     );
