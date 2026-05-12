@@ -295,6 +295,99 @@ describe("speech API helpers", () => {
 });
 
 describe("AG-UI chat streaming", () => {
+  it("keeps raw prompts out of new thread titles and refreshes the saved title", async () => {
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(
+      "a104689b-6fab-4b13-8593-63c2f89c7446"
+    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        createStreamResponse([
+          'data: {"type":"RUN_STARTED","threadId":"thread-a104689b-6fab-4b13-8593-63c2f89c7446","runId":"run-1"}\n\n',
+          'data: {"type":"TEXT_MESSAGE_START","messageId":"assistant-1","role":"assistant"}\n\n',
+          'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"assistant-1","delta":"Done"}\n\n',
+          'data: {"type":"TEXT_MESSAGE_END","messageId":"assistant-1"}\n\n',
+          'data: {"type":"RUN_FINISHED","threadId":"thread-a104689b-6fab-4b13-8593-63c2f89c7446","runId":"run-1","outcome":{"type":"success"}}\n\n',
+        ])
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            agentId: "release-planner",
+            manifestPath:
+              "agents/release-planner/history/thread-a104689b-6fab-4b13-8593-63c2f89c7446/SESSION.md",
+            sessionId: "thread-a104689b-6fab-4b13-8593-63c2f89c7446",
+            startedAt: "2026-04-06T21:00:00.000Z",
+            summary: "Done",
+            title: "Mobile title cleanup",
+            turnCount: 2,
+            turns: [
+              {
+                bodyMarkdown:
+                  "How do I truncate the mobile conversation title?",
+                createdAt: "2026-04-06T21:00:00.000Z",
+                messageId: "turn-1",
+                relativePath:
+                  "agents/release-planner/history/thread-a104689b-6fab-4b13-8593-63c2f89c7446/turn-user-1.md",
+                sender: "user",
+              },
+              {
+                bodyMarkdown: "Done",
+                createdAt: "2026-04-06T21:01:00.000Z",
+                messageId: "turn-2",
+                relativePath:
+                  "agents/release-planner/history/thread-a104689b-6fab-4b13-8593-63c2f89c7446/turn-assistant-1.md",
+                sender: "assistant",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }
+        )
+      );
+    const events: Array<Record<string, unknown>> = [];
+
+    await streamChat(
+      "release-planner",
+      buildChatRequest({
+        prompt: "How do I truncate the mobile conversation title?",
+      }),
+      {
+        onEvent: (event) => events.push(event),
+      }
+    );
+
+    expect(events[0]).toMatchObject({
+      type: "thread",
+      thread: {
+        title: "New Gemma chat",
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "complete",
+      response: {
+        thread: {
+          sessionId: "thread-a104689b-6fab-4b13-8593-63c2f89c7446",
+          title: "Mobile title cleanup",
+        },
+      },
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body.forwardedProps).not.toHaveProperty("title");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/agents/release-planner/sessions/thread-a104689b-6fab-4b13-8593-63c2f89c7446"
+    );
+  });
+
   it("maps AG-UI SSE events back into the chat UI stream model", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
@@ -560,6 +653,18 @@ describe("helper utilities", () => {
         "Ship the mobile fixes first. Then verify the desktop layout."
       )
     ).toBe("Ship the mobile fixes first.");
+  });
+
+  it("uses a neutral optimistic title for brand new chats", () => {
+    expect(
+      __testing.createOptimisticThread({
+        agentId: "release-planner",
+        existingThread: undefined,
+        prompt: "How do I truncate the mobile conversation title?",
+        request: buildChatRequest(),
+        threadId: "thread-1",
+      }).title
+    ).toBe("New Gemma chat");
   });
 
   it("hides complete and partial skill call markup from streamed assistant text", () => {

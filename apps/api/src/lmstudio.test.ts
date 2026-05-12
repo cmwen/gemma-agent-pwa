@@ -134,6 +134,63 @@ describe("lmstudio parsing", () => {
     });
   });
 
+  it("clamps elapsed request duration to zero when the monotonic clock moves backwards", async () => {
+    const onSnapshot = vi.fn();
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(50)
+      .mockReturnValueOnce(40);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          model: "google/gemma-3-4b",
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 7,
+          },
+          choices: [
+            {
+              message: {
+                content: "Final answer.",
+              },
+            },
+          ],
+        })
+      )
+    );
+
+    await expect(
+      streamLmStudioChat({
+        model: "google/gemma-3-4b",
+        config: {
+          provider: "lmstudio",
+          model: "google/gemma-3-4b",
+          presetId: "gemma4-balanced",
+          lmStudioEnableThinking: true,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          topP: 0.95,
+          disabledSkills: [],
+        },
+        conversation: [
+          {
+            messageId: "turn-1",
+            sender: "user",
+            createdAt: "2026-04-16T00:00:00.000Z",
+            bodyMarkdown: "Hello",
+            relativePath: "agents/test/history/session-1/turn-1.md",
+          },
+        ],
+        enabledSkills: [],
+        onSnapshot,
+      })
+    ).resolves.toMatchObject({
+      assistantText: "Final answer.",
+      llmStats: {
+        durationMs: 0,
+      },
+    });
+  });
+
   it("surfaces SSE stream error messages from LM Studio", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

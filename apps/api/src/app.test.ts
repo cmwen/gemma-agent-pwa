@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   saveChatTurn: vi.fn(),
   softDeleteSession: vi.fn(),
   startScheduledTaskRunner: vi.fn(),
+  streamProviderChat: vi.fn(),
   summarizeWorkspace: vi.fn(),
 }));
 
@@ -48,6 +49,7 @@ vi.mock("./chat-loop.js", () => ({
 vi.mock("./llm-provider.js", () => ({
   getProviderModelCatalog: vi.fn(),
   listAvailableModels: mocks.listAvailableModels,
+  streamProviderChat: mocks.streamProviderChat,
 }));
 
 vi.mock("./scheduled-tasks.js", () => ({
@@ -82,6 +84,17 @@ beforeEach(() => {
       isGemma: true,
     },
   ]);
+  mocks.streamProviderChat.mockResolvedValue({
+    assistantText: "Release planning",
+    llmStats: {
+      recordedAt: "2026-05-07T00:00:00.000Z",
+      model: "google/gemma-4b-it",
+      requestCount: 1,
+      inputTokens: 12,
+      outputTokens: 3,
+      durationMs: 90,
+    },
+  });
 });
 
 afterEach(() => {
@@ -144,6 +157,15 @@ describe("app helpers", () => {
     ).toThrow(
       'Unsupported LLM provider "future-provider". LM Studio is the only configured provider.'
     );
+  });
+
+  it("falls back to a generic title when generated output echoes the prompt", () => {
+    expect(
+      __testing.sanitizeConversationTitle(
+        "How do I fix the mobile conversation title?",
+        "How do I fix the mobile conversation title?"
+      )
+    ).toBe("New Gemma chat");
   });
 });
 
@@ -337,7 +359,7 @@ describe("createApiApp chat route", () => {
         sessionId: "session-1",
         startedAt: "2026-05-07T00:00:00.000Z",
         summary: "Pending summary.",
-        title: prompt,
+        title: "Release planning",
         turnCount: 1,
         turns: [userTurn],
       })
@@ -347,7 +369,7 @@ describe("createApiApp chat route", () => {
         sessionId: "session-1",
         startedAt: "2026-05-07T00:00:00.000Z",
         summary: "Release checklist ready.",
-        title: prompt,
+        title: "Release planning",
         turnCount: 2,
         turns: [userTurn, assistantTurn],
       });
@@ -389,13 +411,29 @@ describe("createApiApp chat route", () => {
 
     expect(response.status).toBe(200);
     await response.text();
+    expect(mocks.streamProviderChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation: [
+          expect.objectContaining({
+            bodyMarkdown: expect.stringContaining(
+              "Create a short conversation title"
+            ),
+            sender: "system",
+          }),
+          expect.objectContaining({
+            bodyMarkdown: prompt,
+            sender: "user",
+          }),
+        ],
+      })
+    );
     expect(mocks.saveChatTurn).toHaveBeenNthCalledWith(
       1,
       workspace,
       expect.objectContaining({
         bodyMarkdown: prompt,
         sender: "user",
-        title: prompt,
+        title: "Release planning",
       })
     );
     expect(mocks.runChatLoop).toHaveBeenCalledWith(

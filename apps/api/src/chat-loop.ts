@@ -4,6 +4,7 @@ import type {
   ChatTurn,
   LlmRequestStats,
 } from "@gemma-agent-pwa/contracts";
+import { normalizeLlmRequestStats } from "@gemma-agent-pwa/contracts";
 import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
 import {
   executeSkillScript,
@@ -232,10 +233,11 @@ function updateLlmStats(
   totalLlmStats: LlmRequestStats,
   result: StreamChatResult
 ): void {
-  totalLlmStats.requestCount += result.llmStats.requestCount;
-  totalLlmStats.inputTokens += result.llmStats.inputTokens;
-  totalLlmStats.outputTokens += result.llmStats.outputTokens;
-  totalLlmStats.durationMs += result.llmStats.durationMs;
+  const normalizedResultStats = normalizeLlmRequestStats(result.llmStats);
+  totalLlmStats.requestCount += normalizedResultStats.requestCount;
+  totalLlmStats.inputTokens += normalizedResultStats.inputTokens;
+  totalLlmStats.outputTokens += normalizedResultStats.outputTokens;
+  totalLlmStats.durationMs += normalizedResultStats.durationMs;
 }
 
 function unavailableSkillResult(skillName: string): SkillCallResult {

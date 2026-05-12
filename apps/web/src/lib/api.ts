@@ -27,6 +27,7 @@ import type {
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
 const GEMMA_SKILL_RESULT_EVENT = "gemma-skill-result";
 const SNAPSHOT_FLUSH_INTERVAL_MS = 125;
+const DEFAULT_NEW_CHAT_TITLE = "New Gemma chat";
 
 interface StreamChatCallbacks {
   signal?: AbortSignal;
@@ -272,7 +273,7 @@ export async function streamChat(
     await agent.runAgent(
       {
         context: [],
-        forwardedProps: buildForwardedProps(request, optimisticThread.title),
+        forwardedProps: buildForwardedProps(request, callbacks.thread?.title),
         runId: createId("run"),
         tools: [],
       },
@@ -360,11 +361,15 @@ export async function streamChat(
     optimisticThread,
     assistantTurn
   );
+  const persistedThread =
+    !callbacks.thread && !request.title
+      ? await fetchCompletedThread(agentId, threadId)
+      : undefined;
   callbacks.onEvent({
     type: "complete",
     response: {
-      assistantTurn,
-      thread: completedThread,
+      assistantTurn: persistedThread?.turns.at(-1) ?? assistantTurn,
+      thread: persistedThread ?? completedThread,
     },
   });
 }
@@ -541,10 +546,11 @@ function buildRunAgentMessages(
   ];
 }
 
-function buildForwardedProps(request: ChatRequest, title: string) {
+function buildForwardedProps(request: ChatRequest, existingTitle?: string) {
+  const title = request.title?.trim() || existingTitle?.trim();
   return {
     ...(request.config ? { config: request.config } : {}),
-    title,
+    ...(title ? { title } : {}),
   };
 }
 
@@ -559,8 +565,7 @@ function createOptimisticThread(input: {
   const title =
     input.request.title?.trim() ||
     input.existingThread?.title ||
-    input.prompt.slice(0, 72) ||
-    "New Gemma chat";
+    DEFAULT_NEW_CHAT_TITLE;
   const userTurn: ChatTurn = {
     bodyMarkdown: input.prompt,
     createdAt,
@@ -629,6 +634,17 @@ function summarizeAssistantText(assistantText: string): string {
     .split(/(?<=[.!?])\s+/)
     .find((sentence) => sentence.trim().length > 0);
   return firstSentence?.slice(0, 240) ?? "Pending summary.";
+}
+
+async function fetchCompletedThread(
+  agentId: string,
+  threadId: string
+): Promise<ChatSession | undefined> {
+  try {
+    return await getSession(agentId, threadId);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseGemmaSkillResultMeta(
@@ -764,4 +780,6 @@ export const __testing = {
   SNAPSHOT_FLUSH_INTERVAL_MS,
   sanitizeVisibleAssistantText,
   summarizeAssistantText,
+  buildForwardedProps,
+  fetchCompletedThread,
 };

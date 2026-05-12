@@ -7,6 +7,8 @@ import {
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_DEEP_PRESET_ID,
   mergeRuntimeConfig,
+  normalizeLlmRequestStats,
+  normalizeLlmSessionStats,
   normalizeProviderId,
   normalizeRuntimeConfig,
   requireConfiguredProvider,
@@ -201,5 +203,51 @@ describe("scheduled task schemas", () => {
         sessionMode: "dedicated",
       })
     ).toThrow(/day of week/i);
+  });
+});
+
+describe("LLM stats normalization", () => {
+  it("clamps negative durations before parsing persisted usage metrics", () => {
+    expect(
+      normalizeLlmRequestStats({
+        recordedAt: "2026-05-09T00:00:00.000Z",
+        model: "google/gemma-3-4b",
+        requestCount: 1,
+        inputTokens: 12,
+        outputTokens: 6,
+        durationMs: -25,
+        tokensPerSecond: -1,
+      })
+    ).toEqual({
+      recordedAt: "2026-05-09T00:00:00.000Z",
+      model: "google/gemma-3-4b",
+      requestCount: 1,
+      inputTokens: 12,
+      outputTokens: 6,
+      durationMs: 0,
+      tokensPerSecond: 0,
+    });
+  });
+
+  it("clamps negative persisted session totals before exposing them to the app", () => {
+    expect(
+      normalizeLlmSessionStats({
+        requestCount: 2,
+        inputTokens: 24,
+        outputTokens: 12,
+        totalDurationMs: -90,
+        lastRecordedAt: "2026-05-09T00:00:00.000Z",
+        lastModel: "google/gemma-3-4b",
+        lastTokensPerSecond: -3,
+      })
+    ).toEqual({
+      requestCount: 2,
+      inputTokens: 24,
+      outputTokens: 12,
+      totalDurationMs: 0,
+      lastRecordedAt: "2026-05-09T00:00:00.000Z",
+      lastModel: "google/gemma-3-4b",
+      lastTokensPerSecond: 0,
+    });
   });
 });

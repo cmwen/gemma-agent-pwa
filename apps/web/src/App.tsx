@@ -2111,7 +2111,7 @@ export default function App() {
         selectedAgentId,
         {
           sessionId: activeSessionId,
-          title: thread?.title ?? prompt,
+          title: thread?.title,
           prompt,
           config: runtimeConfig,
         },
@@ -2603,7 +2603,9 @@ export default function App() {
                 type="button"
               >
                 <div className="session-card-top">
-                  <strong>{session.title}</strong>
+                  <strong className="session-card-title">
+                    {session.title}
+                  </strong>
                   {session.deletedAt ? (
                     <span className="chip chip-danger">Deleted</span>
                   ) : null}
@@ -2651,115 +2653,6 @@ export default function App() {
         )}
         id="app-section-chat"
       >
-        <header className="chat-header">
-          <div className="chat-header-summary">
-            <p className="eyebrow">Local Gemma chat</p>
-            <h2>
-              {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
-            </h2>
-            <div className="chat-header-meta">
-              <p className="support-text chat-header-status">
-                {threadDeleted
-                  ? "Read-only · moved to Trash"
-                  : streaming.sending
-                    ? "Streaming live"
-                    : "Streaming ready"}{" "}
-                · {modelTone}
-              </p>
-              <div
-                aria-live="polite"
-                className="voice-strip voice-strip-header"
-              >
-                <span className={voiceTurnStatusClassName}>
-                  {voiceTurnStatus.label}
-                </span>
-                <button
-                  aria-pressed={handsFreeVoiceTurns}
-                  className={`ghost-button voice-toggle ${
-                    handsFreeVoiceTurns ? "is-active" : ""
-                  }`}
-                  onClick={() => setHandsFreeVoiceTurns(!handsFreeVoiceTurns)}
-                  type="button"
-                >
-                  {handsFreeToggleLabel}
-                </button>
-              </div>
-            </div>
-            <div className="chat-overview">
-              <span className="chip">
-                {selectedModel?.displayName ??
-                  runtimeConfig.model ??
-                  "No model"}
-              </span>
-              <span className="chip">{activePreset.title}</span>
-              {handsFreeVoiceTurns ? (
-                <span
-                  className={`${voiceTurnStatusClassName} chat-overview-hands-free-chip`}
-                >
-                  Hands-free on
-                </span>
-              ) : null}
-              <span className="chip">
-                {historyView === "active"
-                  ? `${sessionsQuery.data?.length ?? 0} recent chats`
-                  : `${sessionsQuery.data?.length ?? 0} in Trash`}
-              </span>
-            </div>
-          </div>
-          <div className="chat-header-controls">
-            <div className="chat-header-actions">
-              <fieldset
-                className="mode-toggle"
-                aria-label="Thinking mode"
-                onKeyDown={(event) =>
-                  handleArrowKeyNavigation(event, "horizontal")
-                }
-              >
-                <button
-                  aria-pressed={modeValue === "fast"}
-                  className={modeValue === "fast" ? "is-active" : ""}
-                  data-roving-focus="true"
-                  onClick={() => handleModeChange("fast")}
-                  type="button"
-                >
-                  Fast
-                </button>
-                <button
-                  aria-pressed={modeValue === "think"}
-                  className={modeValue === "think" ? "is-active" : ""}
-                  data-roving-focus="true"
-                  onClick={() => handleModeChange("think")}
-                  type="button"
-                >
-                  Think
-                </button>
-              </fieldset>
-              <button
-                className="ghost-button"
-                onClick={handleNewChat}
-                type="button"
-              >
-                New chat
-              </button>
-              <button
-                aria-controls="app-section-details"
-                aria-expanded={modelDetailsOpen}
-                className="ghost-button"
-                onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
-                ref={chatDetailsToggleRef}
-                type="button"
-              >
-                {modelDetailsOpen ? "Hide details" : "Show details"}
-              </button>
-            </div>
-            {thread ? (
-              <div className="chat-thread-actions">
-                {renderSessionActionButtons(thread)}
-              </div>
-            ) : null}
-          </div>
-        </header>
-
         <div
           aria-label="Conversation timeline"
           aria-live="polite"
@@ -2769,6 +2662,114 @@ export default function App() {
           ref={timelineRef}
           role="log"
         >
+          <header className="chat-header">
+            <div className="chat-header-summary">
+              <p className="eyebrow">Local Gemma chat</p>
+              <h2 className="chat-header-title">
+                {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
+              </h2>
+              <div className="chat-header-meta">
+                <p className="support-text chat-header-status">
+                  {threadDeleted
+                    ? "Read-only · moved to Trash"
+                    : streaming.sending
+                      ? "Streaming live"
+                      : "Streaming ready"}{" "}
+                  · {modelTone}
+                </p>
+                <div
+                  aria-live="polite"
+                  className="voice-strip voice-strip-header"
+                >
+                  <span className={voiceTurnStatusClassName}>
+                    {voiceTurnStatus.label}
+                  </span>
+                  <button
+                    aria-pressed={handsFreeVoiceTurns}
+                    className={`ghost-button voice-toggle ${
+                      handsFreeVoiceTurns ? "is-active" : ""
+                    }`}
+                    onClick={() => setHandsFreeVoiceTurns(!handsFreeVoiceTurns)}
+                    type="button"
+                  >
+                    {handsFreeToggleLabel}
+                  </button>
+                </div>
+              </div>
+              <div className="chat-overview">
+                <span className="chip">
+                  {selectedModel?.displayName ??
+                    runtimeConfig.model ??
+                    "No model"}
+                </span>
+                <span className="chip">{activePreset.title}</span>
+                {handsFreeVoiceTurns ? (
+                  <span
+                    className={`${voiceTurnStatusClassName} chat-overview-hands-free-chip`}
+                  >
+                    Hands-free on
+                  </span>
+                ) : null}
+                <span className="chip">
+                  {historyView === "active"
+                    ? `${sessionsQuery.data?.length ?? 0} recent chats`
+                    : `${sessionsQuery.data?.length ?? 0} in Trash`}
+                </span>
+              </div>
+            </div>
+            <div className="chat-header-controls">
+              <div className="chat-header-actions">
+                <fieldset
+                  className="mode-toggle"
+                  aria-label="Thinking mode"
+                  onKeyDown={(event) =>
+                    handleArrowKeyNavigation(event, "horizontal")
+                  }
+                >
+                  <button
+                    aria-pressed={modeValue === "fast"}
+                    className={modeValue === "fast" ? "is-active" : ""}
+                    data-roving-focus="true"
+                    onClick={() => handleModeChange("fast")}
+                    type="button"
+                  >
+                    Fast
+                  </button>
+                  <button
+                    aria-pressed={modeValue === "think"}
+                    className={modeValue === "think" ? "is-active" : ""}
+                    data-roving-focus="true"
+                    onClick={() => handleModeChange("think")}
+                    type="button"
+                  >
+                    Think
+                  </button>
+                </fieldset>
+                <button
+                  className="ghost-button"
+                  onClick={handleNewChat}
+                  type="button"
+                >
+                  New chat
+                </button>
+                <button
+                  aria-controls="app-section-details"
+                  aria-expanded={modelDetailsOpen}
+                  className="ghost-button"
+                  onClick={() => handleModelDetailsToggle(!modelDetailsOpen)}
+                  ref={chatDetailsToggleRef}
+                  type="button"
+                >
+                  {modelDetailsOpen ? "Hide details" : "Show details"}
+                </button>
+              </div>
+              {thread ? (
+                <div className="chat-thread-actions">
+                  {renderSessionActionButtons(thread)}
+                </div>
+              ) : null}
+            </div>
+          </header>
           {messages.length === 0 ? (
             <div className="empty-state">
               <h3>Local-first Gemma 4 chat</h3>
@@ -2972,6 +2973,21 @@ export default function App() {
                 {agentDetailQuery.data?.description ??
                   "Select an agent to inspect its prompt bundle."}
               </p>
+              <div className="chip-row">
+                <span className="chip">
+                  Type{" "}
+                  {(agentDetailQuery.data?.kind ?? "chat")
+                    .replace(/-/g, " ")
+                    .replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                </span>
+                {(agentDetailQuery.data?.delegatedAgentIds ?? []).map(
+                  (agentId) => (
+                    <span className="chip" key={`delegated-${agentId}`}>
+                      Delegates {agentId}
+                    </span>
+                  )
+                )}
+              </div>
               <div className="chip-row">
                 {(agentDetailQuery.data?.skillNames ?? []).map((skillName) => (
                   <span className="chip" key={skillName}>

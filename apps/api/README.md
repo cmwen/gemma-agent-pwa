@@ -27,6 +27,11 @@ Local Hono API for the PWA. It exposes agent, session, model, and chat routes, t
 | `DELETE /api/agents/:agentId/sessions/:sessionId` | Soft or permanent delete |
 | `POST /api/agents/:agentId/sessions/:sessionId/restore` | Restore a soft-deleted session |
 | `POST /api/agents/:agentId/chat` | Start or continue a streaming chat |
+| `GET /api/planner-runs` | List planner orchestration runs (optionally by planner agent) |
+| `POST /api/planner-runs` | Create a planner run with tasker steps |
+| `GET /api/planner-runs/:plannerAgentId/:runId` | Read one planner run |
+| `POST /api/planner-runs/:plannerAgentId/:runId/execute` | Execute pending/non-success tasker steps |
+| `POST /api/planner-runs/:plannerAgentId/:runId/resume` | Resume a failed/incomplete planner run |
 
 ## Key modules
 

@@ -6,6 +6,7 @@ import {
   deleteSession,
   getSession,
   listSessions,
+  recordSessionLlmUsage,
   restoreSession,
   saveChatTurn,
   softDeleteSession,
@@ -314,6 +315,86 @@ describe("listSessions", () => {
 
     const [summary] = await listSessions(workspace, "release-planner");
     expect(summary?.runtimeConfig).toBeUndefined();
+  });
+
+  it("clamps legacy negative LLM stats when loading sessions", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+
+    const thread = await saveChatTurn(workspace, {
+      agentId: "release-planner",
+      sender: "user",
+      title: "Legacy stats",
+      bodyMarkdown: "Load the session.",
+    });
+
+    await writeFile(
+      path.join(root, path.dirname(thread.manifestPath), "LLM_STATS.json"),
+      `${JSON.stringify(
+        {
+          requestCount: 1,
+          inputTokens: 12,
+          outputTokens: 6,
+          totalDurationMs: -50,
+          lastRecordedAt: "2026-05-09T00:00:00.000Z",
+          lastModel: "google/gemma-3-4b",
+          lastTokensPerSecond: -2,
+        },
+        null,
+        2
+      )}\n`,
+      "utf8"
+    );
+
+    const [summary] = await listSessions(workspace, "release-planner");
+    expect(summary?.llmStats).toEqual({
+      requestCount: 1,
+      inputTokens: 12,
+      outputTokens: 6,
+      totalDurationMs: 0,
+      lastRecordedAt: "2026-05-09T00:00:00.000Z",
+      lastModel: "google/gemma-3-4b",
+      lastTokensPerSecond: 0,
+    });
+
+    const session = await getSession(
+      workspace,
+      "release-planner",
+      thread.sessionId
+    );
+    expect(session.llmStats).toEqual(summary?.llmStats);
+  });
+
+  it("clamps negative request durations before persisting LLM usage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+
+    const thread = await saveChatTurn(workspace, {
+      agentId: "release-planner",
+      sender: "user",
+      title: "New stats",
+      bodyMarkdown: "Record usage.",
+    });
+
+    await expect(
+      recordSessionLlmUsage(workspace, "release-planner", thread.sessionId, {
+        recordedAt: "2026-05-09T00:00:00.000Z",
+        model: "google/gemma-3-4b",
+        requestCount: 1,
+        inputTokens: 10,
+        outputTokens: 4,
+        durationMs: -15,
+      })
+    ).resolves.toEqual({
+      requestCount: 1,
+      inputTokens: 10,
+      outputTokens: 4,
+      totalDurationMs: 0,
+      lastRecordedAt: "2026-05-09T00:00:00.000Z",
+      lastModel: "google/gemma-3-4b",
+    });
   });
 });
 

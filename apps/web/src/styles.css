@@ -368,6 +368,18 @@ kbd {
   gap: 0.75rem;
 }
 
+.session-card-top {
+  align-items: flex-start;
+}
+
+.session-card-title {
+  display: -webkit-box;
+  min-width: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .session-card-button {
   display: flex;
   min-height: 6.75rem;
@@ -479,6 +491,13 @@ kbd {
   min-width: 0;
   flex: 1 1 18rem;
   flex-direction: column;
+}
+
+.chat-header-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .chat-overview {
@@ -1487,6 +1506,14 @@ kbd {
   .chat-header-summary {
     width: 100%;
     flex-basis: auto;
+  }
+
+  .session-card-title {
+    -webkit-line-clamp: 1;
+  }
+
+  .chat-header-title {
+    -webkit-line-clamp: 1;
   }
 
   .chat-header-meta {

@@ -10,6 +10,7 @@ Filesystem adapter for reading and writing `min-kb-store` data. It turns Markdow
 - Load enabled skill documents for prompt assembly
 - Read, create, update, soft-delete, restore, and permanently delete chat sessions
 - Persist assistant turns, attachments, runtime config, and LLM usage stats
+- Persist planner-run orchestration state for resumable planner → tasker workflows
 
 ## Workspace expectations
 
@@ -54,5 +55,6 @@ await saveChatTurn(workspace, {
 - `src/workspace.ts`: workspace discovery and summaries
 - `src/agents.ts`: agent contracts, persona composition, and skill discovery
 - `src/sessions.ts`: session manifests, turns, attachments, and LLM stats
+- `src/planner-runs.ts`: planner-run persistence under `memory/gemma-agent-pwa/planner-runs`
 - `src/runtime-config.ts`: persisted runtime config parsing
 - `src/utils.ts`: file and path helpers used across the package

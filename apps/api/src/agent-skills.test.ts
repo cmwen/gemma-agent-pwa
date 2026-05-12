@@ -9,6 +9,7 @@ const {
   extractSingleValuePositionalArg,
   normalizeCliFlagName,
   normalizeLegacyToolCallInput,
+  parseCliInputArgs,
   resolveInterpreter,
   shouldRetryWithSinglePositionalArg,
 } = __testing;
@@ -224,6 +225,39 @@ describe("structured skill input helpers", () => {
         SKILL_INPUT_JSON: '{"date":"today","text":"Today is a holiday."}',
       },
     });
+  });
+
+  it("passes through CLI-style flag input as positional args", () => {
+    expect(
+      buildStructuredSkillInput(
+        '--type working --agent "Gemma Agent PWA" --title "Run Plan"'
+      )
+    ).toEqual({
+      args: [
+        "--type",
+        "working",
+        "--agent",
+        "Gemma Agent PWA",
+        "--title",
+        "Run Plan",
+      ],
+      env: {},
+    });
+  });
+
+  it("tokenizes quoted CLI input", () => {
+    expect(
+      parseCliInputArgs(
+        "--type working --agent 'Gemma Agent PWA' --title \"Run Plan\""
+      )
+    ).toEqual([
+      "--type",
+      "working",
+      "--agent",
+      "Gemma Agent PWA",
+      "--title",
+      "Run Plan",
+    ]);
   });
 
   it("extracts a fallback positional argument from single-field JSON objects", () => {

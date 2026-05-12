@@ -102,6 +102,49 @@ describe("getAgentById", () => {
     expect(agent?.combinedPrompt).not.toContain("owner: hidden");
     expect(agent?.combinedPrompt).not.toContain("metadata: hidden");
   });
+
+  it("loads orchestrator metadata and delegation targets from AGENT frontmatter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    const defaultRoot = path.join(workspace.agentsRoot, "default");
+    const agentRoot = path.join(workspace.agentsRoot, "release-planner");
+
+    await Promise.all([
+      mkdir(defaultRoot, { recursive: true }),
+      mkdir(agentRoot, { recursive: true }),
+      mkdir(workspace.memoryRoot, { recursive: true }),
+      mkdir(workspace.skillsRoot, { recursive: true }),
+      mkdir(workspace.copilotSkillsRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(defaultRoot, "SOUL.md"), "Default soul.\n", "utf8"),
+      writeFile(
+        path.join(agentRoot, "AGENT.md"),
+        [
+          "---",
+          "title: Release Orchestrator",
+          "kind: orchestrator",
+          "delegatedAgents:",
+          "  - release-tasker",
+          "  - qa-tasker",
+          "---",
+          "Coordinate multi-step release work.",
+        ].join("\n"),
+        "utf8"
+      ),
+    ]);
+
+    const agent = await getAgentById(workspace, "release-planner");
+    expect(agent?.kind).toBe("orchestrator");
+    expect(agent?.delegatedAgentIds).toEqual(["release-tasker", "qa-tasker"]);
+    expect(agent?.combinedPrompt).toContain("## Execution mode");
+    expect(agent?.combinedPrompt).toContain("Agent type: orchestrator");
+    expect(agent?.combinedPrompt).toContain(
+      "Delegation to other agents is disabled in this runtime."
+    );
+    expect(agent?.combinedPrompt).not.toContain("release-tasker");
+  });
 });
 
 describe("listSkillsForAgent", () => {

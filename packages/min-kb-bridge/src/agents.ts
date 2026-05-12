@@ -91,17 +91,21 @@ export async function getAgentById(
     typeof agentDocument.data.title === "string"
       ? agentDocument.data.title
       : `${normalizedAgentId.replace(/-/g, " ")} agent`;
+  const kind = normalizeAgentKind(agentDocument.data);
+  const delegatedAgentIds = parseDelegatedAgentIds(agentDocument.data);
   const description = firstParagraph(agentDocument.content);
   const combinedPrompt = composeAgentPrompt({
     defaultSoul: defaultSoul.content,
     agentContract: agentDocument.content,
     agentSoul: soul?.content,
+    kind,
+    delegatedAgentIds,
     skillNames: skills.map((skill) => skill.name),
   });
 
   return {
     id: normalizedAgentId,
-    kind: "chat",
+    kind,
     title,
     description,
     combinedPrompt,
@@ -112,6 +116,7 @@ export async function getAgentById(
     workingMemoryRoot,
     skillRoot,
     skillNames: skills.map((skill) => skill.name),
+    delegatedAgentIds,
     sessionCount,
     runtimeConfig,
   };
@@ -179,8 +184,21 @@ export function composeAgentPrompt(input: {
   defaultSoul: string;
   agentContract: string;
   agentSoul?: string;
+  kind: AgentSummary["kind"];
+  delegatedAgentIds: string[];
   skillNames: string[];
 }): string {
+  const delegationSection =
+    input.kind === "planner" || input.kind === "orchestrator"
+      ? [
+          "## Execution mode",
+          "",
+          `Agent type: ${input.kind}`,
+          "Delegation to other agents is disabled in this runtime.",
+          "Do not create sub-agent tasks or handoff plans. Complete the request directly in this app using the available skills and context.",
+        ].join("\n")
+      : undefined;
+
   const sections = [
     "You are a custom agent loaded from min-kb-store. Follow the layered Markdown contract below.",
     `## Default persona\n\n${input.defaultSoul.trim()}`,
@@ -191,9 +209,62 @@ export function composeAgentPrompt(input: {
     input.skillNames.length > 0
       ? `## Available skill names\n\n${input.skillNames.map((skillName) => `- ${skillName}`).join("\n")}`
       : undefined,
+    delegationSection,
   ].filter((section): section is string => Boolean(section));
 
   return `${sections.join("\n\n")}\n`;
+}
+
+function normalizeAgentKind(
+  metadata: Record<string, unknown>
+): AgentSummary["kind"] {
+  const candidates = [metadata.kind, metadata.agentType, metadata.type].filter(
+    (value): value is string => typeof value === "string"
+  );
+  const normalized = candidates[0]?.trim().toLowerCase();
+  if (
+    normalized === "planner" ||
+    normalized === "orchestrator" ||
+    normalized === "chat"
+  ) {
+    return normalized;
+  }
+  return "chat";
+}
+
+function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
+  const candidates = [
+    metadata.delegatedAgentIds,
+    metadata.delegatedAgents,
+    metadata.taskerAgentIds,
+    metadata.taskerAgents,
+    metadata.delegates,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseDelegatedAgentIdsValue(candidate);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+  return [];
+}
+
+function parseDelegatedAgentIdsValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => normalizeAgentId(entry))
+      .filter((entry) => entry.length > 0);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => normalizeAgentId(entry))
+      .filter((entry) => entry.length > 0);
+  }
+
+  return [];
 }
 
 async function readSkillDescriptors(

@@ -50,7 +50,9 @@ import {
 import {
   getProviderModelCatalog,
   listAvailableModels,
+  streamProviderChat,
 } from "./llm-provider.js";
+import { registerPlannerRunRoutes } from "./planner-runs.js";
 import {
   registerScheduledTaskRoutes,
   startScheduledTaskRunner,
@@ -62,6 +64,14 @@ import {
 } from "./speech-errors.js";
 
 const defaultSpeechServiceBaseUrl = "http://127.0.0.1:8790";
+const DEFAULT_NEW_CHAT_TITLE = "New Gemma chat";
+const TITLE_SUMMARY_PROMPT = [
+  "Create a short conversation title that paraphrases the user's intent.",
+  "Use 2 to 6 words in sentence case.",
+  "Do not quote, repeat, or closely copy the user's original wording.",
+  "Do not include trailing punctuation.",
+  "Return the title only.",
+].join(" ");
 
 export function createApiApp(workspace: MinKbWorkspace) {
   const app = new Hono();
@@ -245,6 +255,7 @@ export function createApiApp(workspace: MinKbWorkspace) {
   registerScheduledTaskRoutes(app, workspace, {
     onScheduleMutation: scheduledTaskRunner.refresh,
   });
+  registerPlannerRunRoutes(app, workspace);
 
   app.post(
     "/api/agents/:agentId/sessions/:sessionId/restore",
@@ -286,8 +297,10 @@ export function createApiApp(workspace: MinKbWorkspace) {
     const title =
       forwardedProps.title?.trim() ||
       writableThread?.title ||
-      prompt.slice(0, 72) ||
-      "New Gemma chat";
+      (await summarizeConversationTitle({
+        config: mergedConfig,
+        prompt,
+      }));
     const userThread = await saveChatTurn(workspace, {
       agentId,
       sender: "user",
@@ -434,6 +447,83 @@ function summarizeThread(assistantText: string): string {
   return firstSentence?.slice(0, 240) ?? getPresetById().description;
 }
 
+async function summarizeConversationTitle(input: {
+  config: ReturnType<typeof mergeRuntimeConfig>;
+  prompt: string;
+}): Promise<string> {
+  try {
+    const result = await streamProviderChat({
+      model: input.config.model,
+      config: {
+        ...input.config,
+        lmStudioEnableThinking: false,
+        maxCompletionTokens: 64,
+        temperature: 0.1,
+      },
+      conversation: [
+        {
+          bodyMarkdown: TITLE_SUMMARY_PROMPT,
+          createdAt: new Date().toISOString(),
+          messageId: "title-system",
+          relativePath: "in-flight",
+          sender: "system",
+        },
+        {
+          bodyMarkdown: input.prompt,
+          createdAt: new Date().toISOString(),
+          messageId: "title-user",
+          relativePath: "in-flight",
+          sender: "user",
+        },
+      ],
+      enabledSkills: [],
+      onSnapshot: () => undefined,
+    });
+
+    return sanitizeConversationTitle(result.assistantText, input.prompt);
+  } catch (error) {
+    console.error("Conversation title generation failed.", error);
+    return DEFAULT_NEW_CHAT_TITLE;
+  }
+}
+
+function sanitizeConversationTitle(rawTitle: string, prompt: string): string {
+  const firstLine = rawTitle
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  const cleaned = firstLine
+    ?.replace(/^[-*#>\s"'`]+/, "")
+    .replace(/["'`]+$/g, "")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+  if (!cleaned) {
+    return DEFAULT_NEW_CHAT_TITLE;
+  }
+
+  const title = cleaned.slice(0, 60).trim();
+  if (!title || isPromptEcho(title, prompt)) {
+    return DEFAULT_NEW_CHAT_TITLE;
+  }
+
+  return title;
+}
+
+function isPromptEcho(title: string, prompt: string): boolean {
+  const normalizedTitle = normalizeComparisonText(title);
+  const normalizedPrompt = normalizeComparisonText(prompt);
+  return (
+    normalizedTitle.length > 0 && normalizedPrompt.includes(normalizedTitle)
+  );
+}
+
+function normalizeComparisonText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 function parseForwardedProps(value: unknown): {
   config?: PartialChatRuntimeConfig;
   title?: string;
@@ -567,5 +657,6 @@ export const __testing = {
   extractLatestUserPrompt,
   parseForwardedRuntimeConfig,
   parseForwardedProps,
+  sanitizeConversationTitle,
   summarizeThread,
 };

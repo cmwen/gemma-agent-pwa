@@ -13,6 +13,7 @@ Local-first chat PWA for `min-kb-store` agents, optimized for LM Studio with Gem
 - Separate persistence for visible assistant output and captured thinking metadata
 - Optional browser notifications for completed background replies
 - Recurring scheduled tasks with hourly, daily, and weekly cadences
+- Planner-run orchestration where planner agents dispatch tasker agents with resume support
 
 ## Workspace layout
 
@@ -194,6 +195,10 @@ Notes:
 - Scheduled task cadence is stored with the agent, next-run timestamps are
   computed from the task timezone, and missed runs are resumed with a single
   catch-up execution instead of replaying every missed interval.
+- Planner-run state is persisted under
+  `memory/gemma-agent-pwa/planner-runs/<planner-agent-id>.json`; each task
+  stores status, attempt count, errors, and tasker session references so
+  failed runs can resume from the first non-success step.
 
 ## Usability
 

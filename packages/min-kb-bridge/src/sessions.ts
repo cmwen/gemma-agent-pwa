@@ -16,8 +16,8 @@ import type {
 import {
   attachmentUploadSchema,
   chatRuntimeConfigSchema,
-  llmRequestStatsSchema,
-  llmSessionStatsSchema,
+  normalizeLlmRequestStats,
+  normalizeLlmSessionStats,
   senderSchema,
   storedAttachmentSchema,
 } from "@gemma-agent-pwa/contracts";
@@ -711,14 +711,14 @@ async function readLlmStats(
     return undefined;
   }
 
-  return llmSessionStatsSchema.parse(JSON.parse(raw));
+  return normalizeLlmSessionStats(JSON.parse(raw));
 }
 
 async function writeLlmStats(
   sessionDirectory: string,
   stats: LlmSessionStats
 ): Promise<void> {
-  const normalized = llmSessionStatsSchema.parse(stats);
+  const normalized = normalizeLlmSessionStats(stats);
   await fs.writeFile(
     path.join(sessionDirectory, LLM_STATS_FILENAME),
     `${JSON.stringify(normalized, null, 2)}\n`,
@@ -730,10 +730,10 @@ function accumulateLlmSessionStats(
   current: LlmSessionStats | undefined,
   usage: LlmRequestStats
 ): LlmSessionStats {
-  const normalizedCurrent = llmSessionStatsSchema.parse(current ?? {});
-  const normalizedUsage = llmRequestStatsSchema.parse(usage);
+  const normalizedCurrent = normalizeLlmSessionStats(current ?? {});
+  const normalizedUsage = normalizeLlmRequestStats(usage);
 
-  return llmSessionStatsSchema.parse({
+  return normalizeLlmSessionStats({
     requestCount: normalizedCurrent.requestCount + normalizedUsage.requestCount,
     inputTokens: normalizedCurrent.inputTokens + normalizedUsage.inputTokens,
     outputTokens: normalizedCurrent.outputTokens + normalizedUsage.outputTokens,

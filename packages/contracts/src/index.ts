@@ -175,7 +175,7 @@ export function applyPresetRuntimeConfigDefaults(
 
 export const agentSummarySchema = z.object({
   id: z.string().min(1),
-  kind: z.literal("chat").default("chat"),
+  kind: z.enum(["chat", "planner", "orchestrator"]).default("chat"),
   title: z.string().min(1),
   description: z.string().min(1),
   combinedPrompt: z.string().min(1),
@@ -186,6 +186,7 @@ export const agentSummarySchema = z.object({
   workingMemoryRoot: z.string().min(1),
   skillRoot: z.string().min(1),
   skillNames: z.array(z.string()),
+  delegatedAgentIds: z.array(z.string()).optional(),
   sessionCount: z.number().int().nonnegative(),
   runtimeConfig: chatRuntimeConfigSchema.optional(),
 });
@@ -242,6 +243,36 @@ export const llmSessionStatsSchema = z.object({
   lastTokensPerSecond: z.number().nonnegative().optional(),
 });
 export type LlmSessionStats = z.infer<typeof llmSessionStatsSchema>;
+
+function clampNonNegativeMetric(value: unknown): unknown {
+  return typeof value === "number" ? Math.max(0, value) : value;
+}
+
+export function normalizeLlmRequestStats(value: unknown): LlmRequestStats {
+  if (!value || typeof value !== "object") {
+    return llmRequestStatsSchema.parse(value);
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return llmRequestStatsSchema.parse({
+    ...candidate,
+    durationMs: clampNonNegativeMetric(candidate.durationMs),
+    tokensPerSecond: clampNonNegativeMetric(candidate.tokensPerSecond),
+  });
+}
+
+export function normalizeLlmSessionStats(value: unknown): LlmSessionStats {
+  if (!value || typeof value !== "object") {
+    return llmSessionStatsSchema.parse(value);
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return llmSessionStatsSchema.parse({
+    ...candidate,
+    totalDurationMs: clampNonNegativeMetric(candidate.totalDurationMs),
+    lastTokensPerSecond: clampNonNegativeMetric(candidate.lastTokensPerSecond),
+  });
+}
 
 export const scheduledTaskRecurrenceSchema = z.enum([
   "hourly",
@@ -370,6 +401,68 @@ export type ScheduledTaskCreate = z.infer<typeof scheduledTaskCreateSchema>;
 
 export const scheduledTaskUpdateSchema = scheduledTaskBaseSchema.partial();
 export type ScheduledTaskUpdate = z.infer<typeof scheduledTaskUpdateSchema>;
+
+export const plannerTaskStatusSchema = z.enum([
+  "pending",
+  "running",
+  "success",
+  "error",
+]);
+export type PlannerTaskStatus = z.infer<typeof plannerTaskStatusSchema>;
+
+export const plannerRunStatusSchema = z.enum([
+  "pending",
+  "running",
+  "success",
+  "error",
+]);
+export type PlannerRunStatus = z.infer<typeof plannerRunStatusSchema>;
+
+export const plannerTaskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().trim().min(1).max(160),
+  taskerAgentId: z.string().min(1),
+  prompt: z.string().trim().min(1).max(8_000),
+  status: plannerTaskStatusSchema,
+  attemptCount: z.number().int().nonnegative().default(0),
+  startedAt: z.string().min(1).optional(),
+  completedAt: z.string().min(1).optional(),
+  lastError: z.string().min(1).optional(),
+  resultSessionId: z.string().min(1).optional(),
+  resultSummary: z.string().min(1).optional(),
+});
+export type PlannerTask = z.infer<typeof plannerTaskSchema>;
+
+export const plannerRunSchema = z.object({
+  runId: z.string().min(1),
+  plannerAgentId: z.string().min(1),
+  title: z.string().trim().min(1).max(160),
+  objective: z.string().trim().min(1).max(8_000),
+  status: plannerRunStatusSchema,
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  startedAt: z.string().min(1).optional(),
+  completedAt: z.string().min(1).optional(),
+  lastError: z.string().min(1).optional(),
+  tasks: z.array(plannerTaskSchema).min(1),
+});
+export type PlannerRun = z.infer<typeof plannerRunSchema>;
+
+export const plannerTaskCreateSchema = z.object({
+  id: z.string().min(1).optional(),
+  title: z.string().trim().min(1).max(160),
+  taskerAgentId: z.string().min(1),
+  prompt: z.string().trim().min(1).max(8_000),
+});
+export type PlannerTaskCreate = z.infer<typeof plannerTaskCreateSchema>;
+
+export const plannerRunCreateSchema = z.object({
+  plannerAgentId: z.string().min(1),
+  title: z.string().trim().min(1).max(160).optional(),
+  objective: z.string().trim().min(1).max(8_000),
+  tasks: z.array(plannerTaskCreateSchema).min(1),
+});
+export type PlannerRunCreate = z.infer<typeof plannerRunCreateSchema>;
 
 export const chatTurnSchema = z.object({
   messageId: z.string().min(1),

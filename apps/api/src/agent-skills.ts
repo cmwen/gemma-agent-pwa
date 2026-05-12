@@ -537,6 +537,11 @@ function buildStructuredSkillInput(input: string): {
     return { args: [], env: {} };
   }
 
+  const cliArgs = parseCliInputArgs(trimmed);
+  if (cliArgs.length > 0) {
+    return { args: cliArgs, env: {} };
+  }
+
   const parsed = tryParseJson(trimmed);
   if (!isJsonObject(parsed)) {
     return { args: [], env: {} };
@@ -621,6 +626,60 @@ function extractSingleValuePositionalArg(
   }
 
   return undefined;
+}
+
+function parseCliInputArgs(input: string): string[] {
+  if (!/(^|\s)--[A-Za-z0-9-]+/.test(input)) {
+    return [];
+  }
+
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    if (!character) {
+      continue;
+    }
+
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      } else if (
+        character === "\\" &&
+        index + 1 < input.length &&
+        input[index + 1] === quote
+      ) {
+        current += quote;
+        index += 1;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (/\s/.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += character;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
 }
 
 function shouldRetryWithSinglePositionalArg(
@@ -770,6 +829,7 @@ export const __testing = {
   extractSingleValuePositionalArg,
   normalizeCliFlagName,
   normalizeLegacyToolCallInput,
+  parseCliInputArgs,
   parseSkillCalls,
   shouldRetryWithSinglePositionalArg,
   stripSkillCalls,

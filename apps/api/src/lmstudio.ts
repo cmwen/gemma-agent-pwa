@@ -167,7 +167,7 @@ export async function getLmStudioModelCatalog(): Promise<LmStudioModelCatalog> {
 export async function streamLmStudioChat(
   input: StreamLmStudioChatInput
 ): Promise<StreamLmStudioChatResult> {
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   const requestBody = {
     model: input.model,
     messages: buildMessages(
@@ -195,7 +195,7 @@ export async function streamLmStudioChat(
     throw new Error("LM Studio returned no assistant message content.");
   }
 
-  const durationMs = Date.now() - startedAt;
+  const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
   const outputTokens = completion.usage?.completion_tokens ?? 0;
   return {
     assistantText: sections.assistantText,
