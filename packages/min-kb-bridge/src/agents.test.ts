@@ -76,6 +76,10 @@ describe("getAgentById", () => {
     await Promise.all([
       mkdir(defaultRoot, { recursive: true }),
       mkdir(agentRoot, { recursive: true }),
+      mkdir(path.join(workspace.agentsRoot, "release-tasker"), {
+        recursive: true,
+      }),
+      mkdir(path.join(workspace.agentsRoot, "qa-tasker"), { recursive: true }),
       mkdir(workspace.memoryRoot, { recursive: true }),
       mkdir(workspace.skillsRoot, { recursive: true }),
       mkdir(workspace.copilotSkillsRoot, { recursive: true }),
@@ -113,6 +117,10 @@ describe("getAgentById", () => {
     await Promise.all([
       mkdir(defaultRoot, { recursive: true }),
       mkdir(agentRoot, { recursive: true }),
+      mkdir(path.join(workspace.agentsRoot, "release-tasker"), {
+        recursive: true,
+      }),
+      mkdir(path.join(workspace.agentsRoot, "qa-tasker"), { recursive: true }),
       mkdir(workspace.memoryRoot, { recursive: true }),
       mkdir(workspace.skillsRoot, { recursive: true }),
       mkdir(workspace.copilotSkillsRoot, { recursive: true }),
@@ -124,13 +132,21 @@ describe("getAgentById", () => {
         [
           "---",
           "title: Release Orchestrator",
-          "kind: orchestrator",
-          "delegatedAgents:",
-          "  - release-tasker",
-          "  - qa-tasker",
+          "agent_type: orchestrator",
+          'delegates_to: ["agent-release-tasker", "agent-qa-tasker"]',
           "---",
           "Coordinate multi-step release work.",
         ].join("\n"),
+        "utf8"
+      ),
+      writeFile(
+        path.join(workspace.agentsRoot, "release-tasker", "AGENT.md"),
+        "Release tasker.\n",
+        "utf8"
+      ),
+      writeFile(
+        path.join(workspace.agentsRoot, "qa-tasker", "AGENT.md"),
+        "QA tasker.\n",
         "utf8"
       ),
     ]);
@@ -141,9 +157,148 @@ describe("getAgentById", () => {
     expect(agent?.combinedPrompt).toContain("## Execution mode");
     expect(agent?.combinedPrompt).toContain("Agent type: orchestrator");
     expect(agent?.combinedPrompt).toContain(
-      "Delegation to other agents is disabled in this runtime."
+      "Delegation is available through the `delegate-task` tool."
     );
-    expect(agent?.combinedPrompt).not.toContain("release-tasker");
+    expect(agent?.combinedPrompt).toContain(
+      "Allowed delegated agents: release-tasker, qa-tasker."
+    );
+  });
+
+  it("does not default orchestrator delegation targets to every other agent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    const defaultRoot = path.join(workspace.agentsRoot, "default");
+    const orchestratorRoot = path.join(workspace.agentsRoot, "release-planner");
+    const qaRoot = path.join(workspace.agentsRoot, "qa-tasker");
+    const writerRoot = path.join(workspace.agentsRoot, "writer");
+
+    await Promise.all([
+      mkdir(defaultRoot, { recursive: true }),
+      mkdir(orchestratorRoot, { recursive: true }),
+      mkdir(qaRoot, { recursive: true }),
+      mkdir(writerRoot, { recursive: true }),
+      mkdir(workspace.memoryRoot, { recursive: true }),
+      mkdir(workspace.skillsRoot, { recursive: true }),
+      mkdir(workspace.copilotSkillsRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(defaultRoot, "SOUL.md"), "Default soul.\n", "utf8"),
+      writeFile(
+        path.join(orchestratorRoot, "AGENT.md"),
+        [
+          "---",
+          "title: Release Orchestrator",
+          "kind: orchestrator",
+          "---",
+          "Coordinate multi-step release work.",
+        ].join("\n"),
+        "utf8"
+      ),
+      writeFile(path.join(qaRoot, "AGENT.md"), "QA tasker.\n", "utf8"),
+      writeFile(path.join(writerRoot, "AGENT.md"), "Writer.\n", "utf8"),
+    ]);
+
+    const agent = await getAgentById(workspace, "release-planner");
+
+    expect(agent?.delegatedAgentIds).toEqual([]);
+    expect(agent?.combinedPrompt).toContain(
+      "Delegation is not configured for this agent."
+    );
+  });
+
+  it("defaults planner delegation targets to the other agents in the workspace", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    const defaultRoot = path.join(workspace.agentsRoot, "default");
+    const plannerRoot = path.join(workspace.agentsRoot, "fiction-generator");
+    const writerRoot = path.join(workspace.agentsRoot, "scene-writer");
+    const editorRoot = path.join(workspace.agentsRoot, "story-editor");
+
+    await Promise.all([
+      mkdir(defaultRoot, { recursive: true }),
+      mkdir(plannerRoot, { recursive: true }),
+      mkdir(writerRoot, { recursive: true }),
+      mkdir(editorRoot, { recursive: true }),
+      mkdir(workspace.memoryRoot, { recursive: true }),
+      mkdir(workspace.skillsRoot, { recursive: true }),
+      mkdir(workspace.copilotSkillsRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(defaultRoot, "SOUL.md"), "Default soul.\n", "utf8"),
+      writeFile(
+        path.join(plannerRoot, "AGENT.md"),
+        [
+          "---",
+          "title: Fiction Generator",
+          "kind: planner",
+          "---",
+          "Plan multi-stage story work.",
+        ].join("\n"),
+        "utf8"
+      ),
+      writeFile(path.join(writerRoot, "AGENT.md"), "Scene writer.\n", "utf8"),
+      writeFile(path.join(editorRoot, "AGENT.md"), "Story editor.\n", "utf8"),
+    ]);
+
+    const agent = await getAgentById(workspace, "fiction-generator");
+
+    expect(agent?.kind).toBe("planner");
+    expect(agent?.delegatedAgentIds).toEqual(["scene-writer", "story-editor"]);
+    expect(agent?.combinedPrompt).toContain(
+      "Delegation is available through the `delegate-task` tool."
+    );
+    expect(agent?.combinedPrompt).toContain(
+      "Allowed delegated agents: scene-writer, story-editor."
+    );
+  });
+
+  it("defaults chat delegation targets to the other agents in the workspace", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
+    createdRoots.push(root);
+    const workspace = createWorkspace(root);
+    const defaultRoot = path.join(workspace.agentsRoot, "default");
+    const chatRoot = path.join(workspace.agentsRoot, "fiction-generator");
+    const writerRoot = path.join(workspace.agentsRoot, "scene-writer");
+    const editorRoot = path.join(workspace.agentsRoot, "story-editor");
+
+    await Promise.all([
+      mkdir(defaultRoot, { recursive: true }),
+      mkdir(chatRoot, { recursive: true }),
+      mkdir(writerRoot, { recursive: true }),
+      mkdir(editorRoot, { recursive: true }),
+      mkdir(workspace.memoryRoot, { recursive: true }),
+      mkdir(workspace.skillsRoot, { recursive: true }),
+      mkdir(workspace.copilotSkillsRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(defaultRoot, "SOUL.md"), "Default soul.\n", "utf8"),
+      writeFile(
+        path.join(chatRoot, "AGENT.md"),
+        [
+          "---",
+          "title: Fiction Generator",
+          "---",
+          "Write and coordinate fiction work.",
+        ].join("\n"),
+        "utf8"
+      ),
+      writeFile(path.join(writerRoot, "AGENT.md"), "Scene writer.\n", "utf8"),
+      writeFile(path.join(editorRoot, "AGENT.md"), "Story editor.\n", "utf8"),
+    ]);
+
+    const agent = await getAgentById(workspace, "fiction-generator");
+
+    expect(agent?.kind).toBe("chat");
+    expect(agent?.delegatedAgentIds).toEqual(["scene-writer", "story-editor"]);
+    expect(agent?.combinedPrompt).toContain("Agent type: chat");
+    expect(agent?.combinedPrompt).toContain(
+      "Delegation is available through the `delegate-task` tool."
+    );
+    expect(agent?.combinedPrompt).toContain(
+      "Allowed delegated agents: scene-writer, story-editor."
+    );
   });
 });
 

@@ -140,14 +140,20 @@ describe("loop and skill observability logs", () => {
 
   it("logs loaded skill inventory counts", () => {
     const message = buildSkillInventoryDebugLog(context, {
+      agentKind: "chat",
+      delegatedAgentIds: ["qa-tasker"],
       executableSkillCount: 1,
       skillNames: ["search-store", "read-memory"],
+      toolNames: ["delegate-task"],
     });
 
     expect(message.level).toBe("info");
     expect(message.text).toContain("Skill inventory");
+    expect(message.text).toContain("Agent type\nchat");
     expect(message.text).toContain("Loaded\n2");
     expect(message.text).toContain("Executable\n1");
     expect(message.text).toContain("search-store, read-memory");
+    expect(message.text).toContain("Tools\ndelegate-task");
+    expect(message.text).toContain("Delegation targets\nqa-tasker");
   });
 });

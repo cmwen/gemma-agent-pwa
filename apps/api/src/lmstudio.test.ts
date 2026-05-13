@@ -118,6 +118,7 @@ describe("lmstudio parsing", () => {
           },
         ],
         enabledSkills: [],
+        tools: [],
         onSnapshot,
       })
     ).resolves.toMatchObject({
@@ -181,6 +182,7 @@ describe("lmstudio parsing", () => {
           },
         ],
         enabledSkills: [],
+        tools: [],
         onSnapshot,
       })
     ).resolves.toMatchObject({
@@ -235,6 +237,7 @@ describe("lmstudio parsing", () => {
           },
         ],
         enabledSkills: [],
+        tools: [],
         onSnapshot: vi.fn(),
       })
     ).rejects.toThrow("Prompt exceeds context length.");
@@ -317,6 +320,7 @@ describe("lmstudio parsing", () => {
           },
         ],
         enabledSkills: [],
+        tools: [],
         onSnapshot,
       })
     ).resolves.toMatchObject({
@@ -391,6 +395,36 @@ describe("lmstudio parsing", () => {
     expect(prompt).not.toContain("Hidden metadata description.");
     expect(prompt).not.toContain("Scope:");
     expect(prompt).not.toContain("Description:");
+  });
+
+  it("injects model-specific delegation guidance for Gemma 4 selections", () => {
+    const delegationTool = {
+      name: "delegate-task",
+      description: "Hand work to another agent.",
+      parameters: {
+        type: "object",
+      },
+      metadata: {
+        delegatedAgentIds: ["qa-tasker"],
+        kind: "delegation",
+      },
+    };
+
+    const prompt = __testing.buildSystemPrompt(
+      "Coordinate the workflow.",
+      [],
+      [delegationTool],
+      "google/gemma-4b-it"
+    );
+
+    expect(prompt).toContain("## Model behavior");
+    expect(prompt).toContain("The selected model is Gemma 4.");
+    expect(prompt).toContain(
+      "use delegate-task for cross-agent handoffs instead of simulating delegation through memory"
+    );
+    expect(prompt).toContain(
+      "When another agent should do the work, call delegate-task"
+    );
   });
 });
 

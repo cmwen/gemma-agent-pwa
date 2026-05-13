@@ -92,7 +92,12 @@ export async function getAgentById(
       ? agentDocument.data.title
       : `${normalizedAgentId.replace(/-/g, " ")} agent`;
   const kind = normalizeAgentKind(agentDocument.data);
-  const delegatedAgentIds = parseDelegatedAgentIds(agentDocument.data);
+  const delegatedAgentIds = await resolveDelegatedAgentIds(
+    workspace,
+    normalizedAgentId,
+    kind,
+    agentDocument.data
+  );
   const description = firstParagraph(agentDocument.content);
   const combinedPrompt = composeAgentPrompt({
     defaultSoul: defaultSoul.content,
@@ -189,13 +194,20 @@ export function composeAgentPrompt(input: {
   skillNames: string[];
 }): string {
   const delegationSection =
-    input.kind === "planner" || input.kind === "orchestrator"
+    input.delegatedAgentIds.length > 0 ||
+    input.kind === "planner" ||
+    input.kind === "orchestrator"
       ? [
           "## Execution mode",
           "",
           `Agent type: ${input.kind}`,
-          "Delegation to other agents is disabled in this runtime.",
-          "Do not create sub-agent tasks or handoff plans. Complete the request directly in this app using the available skills and context.",
+          input.delegatedAgentIds.length > 0
+            ? [
+                "Delegation is available through the `delegate-task` tool.",
+                "Use it as the preferred path for work that should be handled by another agent, and wait for the tool result before continuing.",
+                `Allowed delegated agents: ${input.delegatedAgentIds.join(", ")}.`,
+              ].join("\n")
+            : "Delegation is not configured for this agent.",
         ].join("\n")
       : undefined;
 
@@ -218,9 +230,12 @@ export function composeAgentPrompt(input: {
 function normalizeAgentKind(
   metadata: Record<string, unknown>
 ): AgentSummary["kind"] {
-  const candidates = [metadata.kind, metadata.agentType, metadata.type].filter(
-    (value): value is string => typeof value === "string"
-  );
+  const candidates = [
+    metadata.kind,
+    metadata.agentType,
+    metadata.agent_type,
+    metadata.type,
+  ].filter((value): value is string => typeof value === "string");
   const normalized = candidates[0]?.trim().toLowerCase();
   if (
     normalized === "planner" ||
@@ -236,6 +251,9 @@ function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
   const candidates = [
     metadata.delegatedAgentIds,
     metadata.delegatedAgents,
+    metadata.delegatesTo,
+    metadata.delegates_to,
+    metadata.delegatesToAgentIds,
     metadata.taskerAgentIds,
     metadata.taskerAgents,
     metadata.delegates,
@@ -247,6 +265,51 @@ function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
     }
   }
   return [];
+}
+
+async function resolveDelegatedAgentIds(
+  workspace: MinKbWorkspace,
+  agentId: string,
+  kind: AgentSummary["kind"],
+  metadata: Record<string, unknown>
+): Promise<string[]> {
+  const availableAgentIds = new Set(
+    (await readDirNames(workspace.agentsRoot))
+      .filter((candidate) => candidate !== "default")
+      .map((candidate) => normalizeAgentId(candidate))
+  );
+  const configuredDelegates = parseDelegatedAgentIds(metadata);
+  if (configuredDelegates.length > 0) {
+    return configuredDelegates.map((candidate) =>
+      resolveAgentReferenceId(candidate, availableAgentIds)
+    );
+  }
+
+  if (kind === "orchestrator") {
+    return [];
+  }
+
+  return [...availableAgentIds]
+    .filter((candidate) => candidate.length > 0 && candidate !== agentId)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function resolveAgentReferenceId(
+  candidate: string,
+  availableAgentIds: Set<string>
+): string {
+  if (availableAgentIds.has(candidate)) {
+    return candidate;
+  }
+
+  if (candidate.startsWith("agent-")) {
+    const unprefixedCandidate = candidate.slice("agent-".length);
+    if (availableAgentIds.has(unprefixedCandidate)) {
+      return unprefixedCandidate;
+    }
+  }
+
+  return candidate;
 }
 
 function parseDelegatedAgentIdsValue(value: unknown): string[] {

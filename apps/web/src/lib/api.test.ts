@@ -1,4 +1,8 @@
-import type { ChatRequest, ChatSession } from "@gemma-agent-pwa/contracts";
+import {
+  type ChatRequest,
+  type ChatSession,
+  createDelegationTool,
+} from "@gemma-agent-pwa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -551,6 +555,51 @@ describe("AG-UI chat streaming", () => {
       { id: "turn-1", role: "user", content: "Outline the release checklist." },
       { id: "turn-2", role: "assistant", content: "Start with tests." },
       { role: "user", content: prompt },
+    ]);
+  });
+
+  it("includes delegation tools in the AG-UI request payload", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        createStreamResponse([
+          'data: {"type":"RUN_STARTED","threadId":"session-1","runId":"run-1"}\n\n',
+          'data: {"type":"RUN_FINISHED","threadId":"session-1","runId":"run-1","outcome":{"type":"success"}}\n\n',
+        ])
+      );
+
+    await streamChat(
+      "release-orchestrator",
+      buildChatRequest({
+        tools: [
+          (() => {
+            const delegationTool = createDelegationTool({
+              agentTitle: "Release Orchestrator",
+              delegatedAgentIds: ["qa-tasker"],
+            });
+            if (!delegationTool) {
+              throw new Error("Expected delegation tool.");
+            }
+            return delegationTool;
+          })(),
+        ],
+      }),
+      {
+        onEvent: () => undefined,
+        thread: buildThread(),
+      }
+    );
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    const body = JSON.parse(String((init as RequestInit).body)) as Record<
+      string,
+      unknown
+    >;
+    expect(body.tools).toEqual([
+      expect.objectContaining({
+        name: "delegate-task",
+        description: expect.stringContaining("Important delegation tool"),
+      }),
     ]);
   });
 

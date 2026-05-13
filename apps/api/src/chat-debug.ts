@@ -45,8 +45,11 @@ interface SkillExecutionDebugInput {
 }
 
 interface SkillInventoryDebugInput {
+  agentKind?: string;
+  delegatedAgentIds?: string[];
   executableSkillCount: number;
   skillNames: string[];
+  toolNames: string[];
 }
 
 const MAX_RESPONSE_PREVIEW_LENGTH = 1_200;
@@ -196,9 +199,12 @@ export function buildSkillInventoryDebugLog(
   return {
     level: "info",
     text: buildMessage(`Skill inventory · ${formatContext(context)}`, [
+      ["Agent type", input.agentKind],
       ["Loaded", String(input.skillNames.length)],
       ["Executable", String(input.executableSkillCount)],
       ["Skills", input.skillNames.join(", ")],
+      ["Tools", input.toolNames.join(", ")],
+      ["Delegation targets", input.delegatedAgentIds?.join(", ")],
     ]),
   };
 }

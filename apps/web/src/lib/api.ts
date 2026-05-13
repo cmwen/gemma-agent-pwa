@@ -275,7 +275,7 @@ export async function streamChat(
         context: [],
         forwardedProps: buildForwardedProps(request, callbacks.thread?.title),
         runId: createId("run"),
-        tools: [],
+        tools: request.tools ?? [],
       },
       createStreamSubscriber({
         onAssistantSnapshot() {

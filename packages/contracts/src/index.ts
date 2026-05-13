@@ -104,6 +104,56 @@ export const skillDescriptorSchema = z.object({
 });
 export type SkillDescriptor = z.infer<typeof skillDescriptorSchema>;
 
+export const chatToolSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  parameters: z.any().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+export type ChatTool = z.infer<typeof chatToolSchema>;
+
+export const DELEGATION_TOOL_NAME = "delegate-task";
+
+export function createDelegationTool(input: {
+  delegatedAgentIds: string[];
+  agentTitle: string;
+}): ChatTool | undefined {
+  if (input.delegatedAgentIds.length === 0) {
+    return undefined;
+  }
+
+  const allowedAgentIds = [...new Set(input.delegatedAgentIds)];
+  return chatToolSchema.parse({
+    name: DELEGATION_TOOL_NAME,
+    description: `Important delegation tool for ${input.agentTitle}. Use it to hand work to another agent and wait for the returned result.`,
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        agentId: {
+          type: "string",
+          enum: allowedAgentIds,
+          description: "The delegated agent to run the task.",
+        },
+        prompt: {
+          type: "string",
+          minLength: 1,
+          description: "The exact work to delegate to that agent.",
+        },
+        title: {
+          type: "string",
+          description: "Optional short label for the delegated task.",
+        },
+      },
+      required: ["agentId", "prompt"],
+    },
+    metadata: {
+      delegatedAgentIds: allowedAgentIds,
+      kind: "delegation",
+    },
+  });
+}
+
 export const chatRuntimeConfigSchema = z.object({
   provider: z.string().trim().min(1).default(DEFAULT_PROVIDER),
   model: z.string().min(1).default(DEFAULT_MODEL),
@@ -607,6 +657,7 @@ export const chatRequestSchema = z.object({
   prompt: z.string().min(1),
   config: partialChatRuntimeConfigSchema.optional(),
   scheduledTaskId: z.string().min(1).optional(),
+  tools: z.array(chatToolSchema).optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

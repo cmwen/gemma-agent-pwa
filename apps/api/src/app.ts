@@ -1,6 +1,7 @@
 import { EventSchemas, type Message, RunAgentInputSchema } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import {
+  createDelegationTool,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
@@ -47,6 +48,7 @@ import {
   isSessionPersistenceCancelledError,
   resolveWritableSession,
 } from "./chat-session.js";
+import { executeDelegatedAgentTool } from "./delegation.js";
 import {
   getProviderModelCatalog,
   listAvailableModels,
@@ -314,6 +316,15 @@ export function createApiApp(workspace: MinKbWorkspace) {
       agentId,
       mergedConfig.disabledSkills
     );
+    const delegationTool = createDelegationTool({
+      agentTitle: agent.title,
+      delegatedAgentIds: agent.delegatedAgentIds ?? [],
+    });
+    const toolsByName = new Map(input.tools.map((tool) => [tool.name, tool]));
+    if (delegationTool) {
+      toolsByName.set(delegationTool.name, delegationTool);
+    }
+    const tools = [...toolsByName.values()];
     logChatDebugMessage(
       buildChatRequestDebugLog({
         agentId,
@@ -330,9 +341,12 @@ export function createApiApp(workspace: MinKbWorkspace) {
           sessionId: userThread.sessionId,
         },
         {
+          agentKind: agent.kind,
+          delegatedAgentIds: agent.delegatedAgentIds ?? [],
           executableSkillCount: enabledSkills.filter((skill) => skill.hasScript)
             .length,
           skillNames: enabledSkills.map((skill) => skill.name),
+          toolNames: tools.map((tool) => tool.name),
         }
       )
     );
@@ -362,11 +376,25 @@ export function createApiApp(workspace: MinKbWorkspace) {
 
         const loopResult = await runChatLoop({
           agentId,
+          agentKind: agent.kind,
           agentPrompt: agent.combinedPrompt,
           config: mergedConfig,
           conversationTurns: userThread.turns,
           enabledSkills,
+          tools,
           sessionId: userThread.sessionId,
+          executeToolCall: (call) =>
+            executeDelegatedAgentTool(
+              workspace,
+              {
+                allowedAgentIds: agent.delegatedAgentIds ?? [],
+                parentAgentId: agentId,
+                parentSessionId: userThread.sessionId,
+                parentAgentTitle: agent.title,
+                parentConfig: mergedConfig,
+              },
+              call.input
+            ),
           emitEvent: (event) => agUiStream.apply(event),
         });
 
@@ -477,6 +505,7 @@ async function summarizeConversationTitle(input: {
         },
       ],
       enabledSkills: [],
+      tools: [],
       onSnapshot: () => undefined,
     });
 

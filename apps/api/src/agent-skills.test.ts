@@ -4,6 +4,7 @@ import { __testing, parseSkillCalls, stripSkillCalls } from "./agent-skills.js";
 const {
   buildExecutableSkillInstructions,
   buildSkillsPromptSections,
+  buildToolPromptSections,
   buildCliArgsFromObject,
   buildStructuredSkillInput,
   extractSingleValuePositionalArg,
@@ -89,6 +90,20 @@ search-store{query: "TODO"}<tool_call|>`;
     ]);
   });
 
+  it("extracts inline Gemma skill calls with legacy object syntax", () => {
+    const text =
+      'skill_call:delegate-task{agentId:<|"|>writer<|"|>,prompt:<|"|>請用繁體中文撰寫一篇關於 Oby 成為世界知名足球員的小說。<|"|>}';
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      {
+        skillName: "delegate-task",
+        input:
+          '{"agentId":"writer","prompt":"請用繁體中文撰寫一篇關於 Oby 成為世界知名足球員的小說。"}',
+      },
+    ]);
+  });
+
   it("returns empty array when no skill calls present", () => {
     const text = "Just a normal response with no tool calls.";
     expect(parseSkillCalls(text)).toEqual([]);
@@ -164,6 +179,16 @@ After`;
 
     expect(stripSkillCalls(text)).toBe("Before\n\n\n\nAfter");
   });
+
+  it("strips inline Gemma skill calls", () => {
+    const text = `Before
+
+skill_call:delegate-task{agentId:<|"|>writer<|"|>,prompt:<|"|>請用繁體中文撰寫故事。<|"|>}
+
+After`;
+
+    expect(stripSkillCalls(text)).toBe("Before\n\n\nAfter");
+  });
 });
 
 describe("normalizeLegacyToolCallInput", () => {
@@ -188,6 +213,31 @@ describe("structured skill input helpers", () => {
     expect(normalizeCliFlagName("ensureParent")).toBe("--ensure-parent");
     expect(normalizeCliFlagName("with_text")).toBe("--with-text");
     expect(normalizeCliFlagName("date")).toBe("--date");
+  });
+
+  describe("buildToolPromptSections", () => {
+    it("marks tools as executable outside the executable-skill count", () => {
+      const sections = buildToolPromptSections([
+        {
+          name: "delegate-task",
+          description: "Hand work to another agent.",
+          parameters: {
+            type: "object",
+          },
+          metadata: {
+            kind: "delegation",
+            delegatedAgentIds: ["qa-tasker"],
+          },
+        },
+      ]);
+
+      expect(sections).toContain("## Available tools");
+      expect(sections).toContain(
+        "Tools listed here are executable even when they do not appear in the executable-skill count below."
+      );
+      expect(sections).toContain("### delegate-task");
+      expect(sections).toContain("Allowed delegated agents: qa-tasker.");
+    });
   });
 
   it("converts JSON object input into CLI arguments", () => {
@@ -257,6 +307,21 @@ describe("structured skill input helpers", () => {
       "Gemma Agent PWA",
       "--title",
       "Run Plan",
+    ]);
+  });
+
+  it("coalesces unquoted multi-word flag values until the next flag", () => {
+    expect(
+      parseCliInputArgs(
+        '--type working --title Soccer Star Origin Story Plan --body "Goal: write the story."'
+      )
+    ).toEqual([
+      "--type",
+      "working",
+      "--title",
+      "Soccer Star Origin Story Plan",
+      "--body",
+      "Goal: write the story.",
     ]);
   });
 
@@ -376,6 +441,9 @@ describe("skill prompt building", () => {
     expect(instructions).not.toContain("Hidden frontmatter description.");
     expect(instructions).toContain(
       "When a skill needs a single free-form or positional input"
+    );
+    expect(instructions).toContain(
+      'When a skill needs named inputs like type, title, body, path, or agentId, prefer a JSON object body such as {"type":"working","title":"Run plan"}.'
     );
   });
 });

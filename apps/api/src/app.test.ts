@@ -98,7 +98,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 describe("app helpers", () => {
@@ -188,7 +188,10 @@ describe("createApiApp chat route", () => {
     };
     mocks.getAgentById.mockResolvedValue({
       id: "release-planner",
+      kind: "planner",
+      title: "Release Planner",
       combinedPrompt: "You are a release planner.",
+      delegatedAgentIds: ["qa-tasker"],
       runtimeConfig: {
         provider: "lmstudio",
         presetId: "gemma4-fast",
@@ -292,6 +295,14 @@ describe("createApiApp chat route", () => {
           disabledSkills: ["skip-me"],
         }),
         sessionId: "session-1",
+        tools: [
+          expect.objectContaining({
+            name: "delegate-task",
+            metadata: expect.objectContaining({
+              delegatedAgentIds: ["qa-tasker"],
+            }),
+          }),
+        ],
       })
     );
     expect(mocks.saveChatTurn).toHaveBeenNthCalledWith(

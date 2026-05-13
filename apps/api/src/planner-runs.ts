@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type ChatRuntimeConfig,
+  createDelegationTool,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
@@ -23,6 +24,7 @@ import {
 import type { Hono } from "hono";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
+import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
 
 export function registerPlannerRunRoutes(
@@ -268,13 +270,32 @@ async function executePlannerTask(
     task.taskerAgentId,
     runtimeConfig.disabledSkills
   );
+  const delegationTool = createDelegationTool({
+    agentTitle: taskerAgent.title,
+    delegatedAgentIds: taskerAgent.delegatedAgentIds ?? [],
+  });
+  const tools = delegationTool ? [delegationTool] : [];
   const loopResult = await runChatLoop({
     agentId: task.taskerAgentId,
+    agentKind: taskerAgent.kind,
     agentPrompt: taskerAgent.combinedPrompt,
     config: runtimeConfig,
     conversationTurns: userThread.turns,
     enabledSkills,
+    tools,
     sessionId: userThread.sessionId,
+    executeToolCall: (call) =>
+      executeDelegatedAgentTool(
+        workspace,
+        {
+          allowedAgentIds: taskerAgent.delegatedAgentIds ?? [],
+          parentAgentId: task.taskerAgentId,
+          parentSessionId: userThread.sessionId,
+          parentAgentTitle: taskerAgent.title,
+          parentConfig: runtimeConfig,
+        },
+        call.input
+      ),
   });
   const assistantSummary = summarizeThread(loopResult.assistantText);
   await saveChatTurn(workspace, {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type ChatRuntimeConfig,
+  createDelegationTool,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
@@ -27,6 +28,7 @@ import {
 import type { Hono } from "hono";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
+import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
 
 const RUN_HISTORY_LIMIT = 20;
@@ -421,13 +423,32 @@ async function executeScheduledChat(
     task.agentId,
     runtimeConfig.disabledSkills
   );
+  const delegationTool = createDelegationTool({
+    agentTitle: agent.title,
+    delegatedAgentIds: agent.delegatedAgentIds ?? [],
+  });
+  const tools = delegationTool ? [delegationTool] : [];
   const loopResult = await runChatLoop({
     agentId: task.agentId,
+    agentKind: agent.kind,
     agentPrompt: agent.combinedPrompt,
     config: runtimeConfig,
     conversationTurns: userThread.turns,
     enabledSkills,
+    tools,
     sessionId: userThread.sessionId,
+    executeToolCall: (call) =>
+      executeDelegatedAgentTool(
+        workspace,
+        {
+          allowedAgentIds: agent.delegatedAgentIds ?? [],
+          parentAgentId: task.agentId,
+          parentSessionId: userThread.sessionId,
+          parentAgentTitle: agent.title,
+          parentConfig: runtimeConfig,
+        },
+        call.input
+      ),
   });
   await saveChatTurn(workspace, {
     agentId: task.agentId,

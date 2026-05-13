@@ -1,6 +1,7 @@
 import os from "node:os";
 import type {
   ChatRuntimeConfig,
+  ChatTool,
   ChatTurn,
   LlmRequestStats,
   ModelDescriptor,
@@ -10,6 +11,7 @@ import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
 import {
   buildExecutableSkillInstructions,
   buildSkillsPromptSections,
+  buildToolPromptSections,
 } from "./agent-skills.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1234/v1";
@@ -23,6 +25,28 @@ const THINKING_BLOCK_PATTERNS = [
   /^\s*<thinking>\s*([\s\S]*?)\s*<\/thinking>\s*/i,
   /^\s*<reasoning>\s*([\s\S]*?)\s*<\/reasoning>\s*/i,
 ];
+const DELEGATION_TOOL_NAME = "delegate-task";
+const MODEL_PROMPT_RULES = [
+  {
+    id: "gemma-4",
+    pattern: /gemma-4/i,
+    instructions: [
+      "The selected model is Gemma 4.",
+      "Keep tool decisions literal and execution-oriented.",
+      "If delegation is available, use delegate-task for cross-agent handoffs instead of simulating delegation through memory, note-taking, or placeholder skills.",
+      "Do not invent missing tools, agent names, or runtime capabilities.",
+    ],
+  },
+  {
+    id: "gemma",
+    pattern: /gemma/i,
+    instructions: [
+      "The selected model is a Gemma-family model.",
+      "Prefer compact, direct replies and exact tool names from the prompt.",
+      "Only claim work completed after the relevant tool result appears in the conversation.",
+    ],
+  },
+] as const;
 let preferredBaseUrl: string | undefined;
 let cachedModelCatalog:
   | {
@@ -76,6 +100,7 @@ export interface StreamLmStudioChatInput {
   conversation: ChatTurn[];
   agentPrompt?: string;
   enabledSkills: LoadedSkillDocument[];
+  tools?: ChatTool[];
   onSnapshot: (snapshot: StreamSnapshot) => void;
 }
 
@@ -178,7 +203,9 @@ export async function streamLmStudioChat(
         contextWindowSize:
           input.config.contextWindowSize ?? DEFAULT_CONTEXT_WINDOW_SIZE,
         maxCompletionTokens: input.config.maxCompletionTokens ?? 4096,
-      }
+      },
+      input.tools,
+      input.model
     ),
     max_completion_tokens: input.config.maxCompletionTokens,
     temperature: input.config.temperature,
@@ -271,9 +298,16 @@ function buildMessages(
   conversation: ChatTurn[],
   agentPrompt: string | undefined,
   enabledSkills: LoadedSkillDocument[],
-  budget: ContextBudget
+  budget: ContextBudget,
+  tools: ChatTool[] = [],
+  modelId?: string
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
-  const systemPrompt = buildSystemPrompt(agentPrompt, enabledSkills);
+  const systemPrompt = buildSystemPrompt(
+    agentPrompt,
+    enabledSkills,
+    tools,
+    modelId
+  );
   const systemTokens = systemPrompt ? estimateTokens(systemPrompt) : 0;
   const availableForHistory =
     budget.contextWindowSize - systemTokens - budget.maxCompletionTokens;
@@ -334,23 +368,57 @@ function trimToContextWindow(
 
 function buildSystemPrompt(
   agentPrompt: string | undefined,
-  enabledSkills: LoadedSkillDocument[]
+  enabledSkills: LoadedSkillDocument[],
+  tools: ChatTool[] = [],
+  modelId?: string
 ): string | undefined {
   const skillCallInstructions = buildExecutableSkillInstructions(enabledSkills);
+  const toolPromptSections = buildToolPromptSections(tools);
+  const modelPromptSection = buildModelPromptSection(modelId, tools);
+  const hasExecutableSkills = enabledSkills.some((skill) => skill.hasScript);
+  const hasTools = tools.length > 0;
 
   const sections = [
     "You are running through LM Studio inside Gemma Agent PWA.",
     "Stay grounded in the current conversation and the provided agent instructions.",
-    enabledSkills.some((skill) => skill.hasScript)
+    hasExecutableSkills || hasTools
       ? undefined
       : "Do not imply tool execution, MCP access, or external system results unless they already appear in the conversation.",
+    modelPromptSection,
     agentPrompt?.trim()
       ? `## Agent instructions\n\n${agentPrompt.trim()}`
       : undefined,
+    toolPromptSections,
     buildSkillsPromptSections(enabledSkills),
     skillCallInstructions,
   ].filter((section): section is string => Boolean(section?.trim()));
   return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
+function buildModelPromptSection(
+  modelId: string | undefined,
+  tools: ChatTool[]
+): string | undefined {
+  const matchedRule = MODEL_PROMPT_RULES.find((rule) =>
+    rule.pattern.test(modelId ?? "")
+  );
+  const hasDelegationTool = tools.some(
+    (tool) => tool.name === DELEGATION_TOOL_NAME
+  );
+
+  if (!matchedRule && !hasDelegationTool) {
+    return undefined;
+  }
+
+  const lines = [
+    "## Model behavior",
+    ...(matchedRule?.instructions ?? []),
+    hasDelegationTool
+      ? "When another agent should do the work, call delegate-task with one of the allowed agentId values and wait for the tool result before continuing."
+      : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.join("\n");
 }
 
 function mapTurnRole(

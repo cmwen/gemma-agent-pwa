@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import type { ChatTool } from "@gemma-agent-pwa/contracts";
 import type { MinKbWorkspace } from "@gemma-agent-pwa/min-kb-bridge";
 import {
   type LoadedSkillDocument,
@@ -12,6 +13,8 @@ const MAX_SKILL_GUIDANCE_PARAGRAPHS = 3;
 const MAX_SKILL_GUIDANCE_CHARS = 900;
 const XML_SKILL_CALL_PATTERN =
   /<skill_call\s+name="([^"]+)">([\s\S]*?)<\/skill_call>/g;
+const INLINE_SKILL_CALL_PATTERN =
+  /^\s*skill_call\s*:\s*([A-Za-z0-9_.-]+)\s*(.*)$/gm;
 const LEGACY_TOOL_CALL_PATTERN =
   /<\|tool_call>\s*call(?:\s*:\s*|\s+)([A-Za-z0-9_.-]+)([\s\S]*?)(?:<\|tool_call\|>|<tool_call\|>|<\/tool_call>)/g;
 const LEGACY_QUOTE_TOKEN = '<|"|>';
@@ -61,7 +64,8 @@ export function buildExecutableSkillInstructions(
     "If the latest user message already gives you enough detail to use a skill, call it directly instead of asking a follow-up question.",
     "The system will execute the skill and return its output.",
     "When a skill needs a single free-form or positional input such as a search query, topic, or file path, pass plain text inside the skill_call body instead of wrapping it in JSON.",
-    "Use a JSON object only when you need named flags or multiple named arguments. The runtime also forwards top-level JSON fields as CLI flags such as --field value for legacy scripts.",
+    'When a skill needs named inputs like type, title, body, path, or agentId, prefer a JSON object body such as {"type":"working","title":"Run plan"}. This is more reliable than hand-written CLI flags.',
+    "The runtime forwards top-level JSON fields as CLI flags such as --field value for legacy scripts, so prefer JSON over hand-written --flag value text unless the skill explicitly requires exact CLI syntax.",
     "After you receive skill results, continue working toward the user's request. If the result is sufficient, answer the user directly in plain language. If you still need another executable skill, emit the next skill_call block(s) only. Do not expose chain-of-thought, reasoning traces, or raw tool-call markup.",
     "Only call skills that are listed below as executable. Treat every other skill as reference-only context.",
     "",
@@ -88,6 +92,21 @@ export function buildSkillsPromptSections(
   ].join("\n\n");
 }
 
+export function buildToolPromptSections(
+  tools: ChatTool[] = []
+): string | undefined {
+  if (tools.length === 0) {
+    return undefined;
+  }
+
+  return [
+    "## Available tools",
+    "To use a tool, emit a skill_call block with the tool name and the tool input body. The runtime will execute the tool and return the result before you continue.",
+    "Tools listed here are executable even when they do not appear in the executable-skill count below.",
+    ...tools.map((tool) => buildToolPromptSection(tool)),
+  ].join("\n\n");
+}
+
 function buildSkillPromptSection(skill: LoadedSkillDocument): string {
   const summary = summarizeSkillBody(skill.content);
   const guidance = extractSkillGuidance(skill.content, summary);
@@ -99,6 +118,42 @@ function buildSkillPromptSection(skill: LoadedSkillDocument): string {
       : "Reference-only in this runtime. Do not call it as a tool.",
     summary ? `Summary: ${summary}` : undefined,
     guidance ? `Guidance:\n${indentBlock(guidance, "  ")}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n");
+}
+
+function buildToolPromptSection(tool: ChatTool): string {
+  const metadata = tool.metadata ?? {};
+  const allowedAgentIds = Array.isArray(metadata.delegatedAgentIds)
+    ? metadata.delegatedAgentIds.filter(
+        (entry): entry is string => typeof entry === "string"
+      )
+    : [];
+  const parameters =
+    tool.parameters !== undefined && typeof tool.parameters === "object"
+      ? JSON.stringify(tool.parameters, null, 2)
+      : tool.parameters !== undefined
+        ? String(tool.parameters)
+        : undefined;
+
+  return [
+    `### ${tool.name}`,
+    metadata.kind === "delegation"
+      ? "Important delegation tool."
+      : "Available tool.",
+    tool.description,
+    metadata.kind === "delegation"
+      ? [
+          "Use this tool whenever another agent should perform the work.",
+          "Do not simulate delegation by storing notes, writing memory, or calling non-delegation skills as a handoff.",
+          'Prefer a JSON body such as {"agentId":"qa-tasker","prompt":"Check the release checklist."} and wait for the returned result before continuing.',
+        ].join(" ")
+      : undefined,
+    allowedAgentIds.length > 0
+      ? `Allowed delegated agents: ${allowedAgentIds.join(", ")}.`
+      : undefined,
+    parameters ? `Parameters:\n${indentBlock(parameters, "  ")}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -157,6 +212,9 @@ function truncateForPrompt(text: string, maxLength: number): string {
 export function parseSkillCalls(text: string): SkillCallRequest[] {
   const calls: SkillCallRequest[] = [];
   collectSkillCalls(text, XML_SKILL_CALL_PATTERN, calls);
+  collectSkillCalls(text, INLINE_SKILL_CALL_PATTERN, calls, (input) =>
+    normalizeLegacyToolCallInput(input)
+  );
   collectSkillCalls(text, LEGACY_TOOL_CALL_PATTERN, calls, (input) =>
     normalizeLegacyToolCallInput(input)
   );
@@ -166,6 +224,7 @@ export function parseSkillCalls(text: string): SkillCallRequest[] {
 export function stripSkillCalls(text: string): string {
   return text
     .replace(XML_SKILL_CALL_PATTERN, "")
+    .replace(INLINE_SKILL_CALL_PATTERN, "")
     .replace(LEGACY_TOOL_CALL_PATTERN, "")
     .trim();
 }
@@ -633,7 +692,7 @@ function parseCliInputArgs(input: string): string[] {
     return [];
   }
 
-  const tokens: string[] = [];
+  const rawTokens: string[] = [];
   let current = "";
   let quote: '"' | "'" | undefined;
 
@@ -666,7 +725,7 @@ function parseCliInputArgs(input: string): string[] {
 
     if (/\s/.test(character)) {
       if (current) {
-        tokens.push(current);
+        rawTokens.push(current);
         current = "";
       }
       continue;
@@ -676,10 +735,44 @@ function parseCliInputArgs(input: string): string[] {
   }
 
   if (current) {
-    tokens.push(current);
+    rawTokens.push(current);
   }
 
-  return tokens;
+  const normalizedTokens: string[] = [];
+  for (let index = 0; index < rawTokens.length; index += 1) {
+    const token = rawTokens[index];
+    if (!token) {
+      continue;
+    }
+
+    if (!isCliFlagToken(token)) {
+      normalizedTokens.push(token);
+      continue;
+    }
+
+    normalizedTokens.push(token);
+    const valueTokens: string[] = [];
+    while (
+      index + 1 < rawTokens.length &&
+      !isCliFlagToken(rawTokens[index + 1] ?? "")
+    ) {
+      const valueToken = rawTokens[index + 1];
+      if (valueToken) {
+        valueTokens.push(valueToken);
+      }
+      index += 1;
+    }
+
+    if (valueTokens.length > 0) {
+      normalizedTokens.push(valueTokens.join(" "));
+    }
+  }
+
+  return normalizedTokens;
+}
+
+function isCliFlagToken(token: string): boolean {
+  return /^--[A-Za-z0-9-]+$/.test(token);
 }
 
 function shouldRetryWithSinglePositionalArg(
@@ -724,15 +817,56 @@ async function runSkillProcess(
     let stdout = "";
     let stderr = "";
     let finished = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const resolveOnce = (result: SkillProcessResult) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      resolve(result);
+    };
 
     const child = spawn(options.command, options.args, {
       cwd: options.cwd,
       env: options.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    child.stdin.on("error", (error) => {
+      if (isBrokenPipeError(error)) {
+        return;
+      }
 
-    child.stdin.write(options.stdin);
-    child.stdin.end();
+      resolveOnce({
+        stdout,
+        stderr,
+        exitCode: 1,
+        timedOut: false,
+        timeoutMs: options.timeoutMs,
+        errorMessage: error.message,
+      });
+    });
+
+    if (options.stdin.length > 0) {
+      try {
+        child.stdin.write(options.stdin);
+      } catch (error) {
+        if (!isBrokenPipeError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    try {
+      child.stdin.end();
+    } catch (error) {
+      if (!isBrokenPipeError(error)) {
+        throw error;
+      }
+    }
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (stdout.length < MAX_OUTPUT_BYTES) {
@@ -746,11 +880,10 @@ async function runSkillProcess(
       }
     });
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       if (!finished) {
-        finished = true;
         child.kill("SIGTERM");
-        resolve({
+        resolveOnce({
           stdout,
           stderr,
           exitCode: 124,
@@ -761,10 +894,7 @@ async function runSkillProcess(
     }, options.timeoutMs);
 
     child.on("close", (code) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      resolve({
+      resolveOnce({
         stdout,
         stderr,
         exitCode: code ?? 1,
@@ -774,10 +904,7 @@ async function runSkillProcess(
     });
 
     child.on("error", (error) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      resolve({
+      resolveOnce({
         stdout,
         stderr,
         exitCode: 1,
@@ -787,6 +914,14 @@ async function runSkillProcess(
       });
     });
   });
+}
+
+function isBrokenPipeError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "EPIPE"
+  );
 }
 
 function formatSkillProcessResult(
@@ -825,6 +960,7 @@ export const __testing = {
   buildCliArgsFromObject,
   buildExecutableSkillInstructions,
   buildSkillsPromptSections,
+  buildToolPromptSections,
   buildStructuredSkillInput,
   extractSingleValuePositionalArg,
   normalizeCliFlagName,

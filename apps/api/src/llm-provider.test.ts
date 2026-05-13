@@ -50,6 +50,7 @@ describe("LLM provider dispatch", () => {
         },
         conversation: [],
         enabledSkills: [],
+        tools: [],
         onSnapshot,
       })
     ).resolves.toMatchObject({

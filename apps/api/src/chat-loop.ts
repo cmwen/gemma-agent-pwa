@@ -1,14 +1,20 @@
 import type {
+  AgentSummary,
   ChatRuntimeConfig,
   ChatStreamEvent,
+  ChatTool,
   ChatTurn,
   LlmRequestStats,
 } from "@gemma-agent-pwa/contracts";
-import { normalizeLlmRequestStats } from "@gemma-agent-pwa/contracts";
+import {
+  DELEGATION_TOOL_NAME,
+  normalizeLlmRequestStats,
+} from "@gemma-agent-pwa/contracts";
 import type { LoadedSkillDocument } from "@gemma-agent-pwa/min-kb-bridge";
 import {
   executeSkillScript,
   parseSkillCalls,
+  type SkillCallRequest,
   type SkillCallResult,
   stripSkillCalls,
 } from "./agent-skills.js";
@@ -20,7 +26,8 @@ import {
 } from "./chat-debug.js";
 import { streamProviderChat } from "./llm-provider.js";
 
-const MAX_SKILL_LOOP_ITERATIONS = 5;
+const DEFAULT_MAX_SKILL_LOOP_ITERATIONS = 5;
+const MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS = 12;
 const FINALIZE_AFTER_SKILLS_INSTRUCTION =
   "Use the skill result above to continue solving the user's latest request. If you have enough information, answer the user directly in plain language. If you still need another executable skill, emit the next skill_call block(s) only. Do not include reasoning traces, planning notes, or raw tool-call markup in the visible reply.";
 
@@ -30,11 +37,14 @@ type ExecuteSkill = typeof executeSkillScript;
 
 interface ChatLoopOptions {
   agentId: string;
+  agentKind?: AgentSummary["kind"];
   agentPrompt: string | undefined;
   config: ChatRuntimeConfig;
   conversationTurns: ChatTurn[];
   enabledSkills: LoadedSkillDocument[];
+  tools?: ChatTool[];
   sessionId: string;
+  executeToolCall?: (call: SkillCallRequest) => Promise<SkillCallResult>;
   emitEvent?: (
     event: Extract<
       ChatStreamEvent,
@@ -52,14 +62,21 @@ interface ChatLoopResult {
   llmStats: LlmRequestStats;
 }
 
+interface AssistantFallback {
+  assistantText: string;
+  thinkingText?: string;
+}
+
 export async function runChatLoop(
   options: ChatLoopOptions
 ): Promise<ChatLoopResult> {
   const streamChat = options.streamChat ?? streamProviderChat;
   const executeSkill = options.executeSkill ?? executeSkillScript;
   const conversationTurns = [...options.conversationTurns];
+  const maxSkillLoopIterations = getMaxSkillLoopIterations(options.agentKind);
   let finalAssistantText = "";
   let finalThinkingText: string | undefined;
+  let latestAssistantFallback: AssistantFallback | undefined;
 
   const totalLlmStats: LlmRequestStats = {
     recordedAt: new Date().toISOString(),
@@ -70,17 +87,14 @@ export async function runChatLoop(
     durationMs: 0,
   };
 
-  for (
-    let iteration = 0;
-    iteration < MAX_SKILL_LOOP_ITERATIONS;
-    iteration += 1
-  ) {
+  for (let iteration = 0; iteration < maxSkillLoopIterations; iteration += 1) {
     const result = await streamChat({
       model: options.config.model,
       config: options.config,
       conversation: conversationTurns,
       agentPrompt: options.agentPrompt,
       enabledSkills: options.enabledSkills,
+      tools: options.tools ?? [],
       onSnapshot: (snapshot) =>
         Promise.resolve(
           options.emitEvent?.({
@@ -93,6 +107,7 @@ export async function runChatLoop(
     updateLlmStats(totalLlmStats, result);
 
     const skillCalls = parseSkillCalls(result.assistantText);
+    const assistantTextWithoutCalls = stripSkillCalls(result.assistantText);
     logChatDebugMessage(
       buildLoopIterationDebugLog(
         {
@@ -109,8 +124,12 @@ export async function runChatLoop(
     );
 
     if (skillCalls.length === 0) {
-      finalAssistantText = result.assistantText;
-      finalThinkingText = result.thinkingText;
+      finalAssistantText =
+        assistantTextWithoutCalls ||
+        latestAssistantFallback?.assistantText ||
+        "";
+      finalThinkingText =
+        result.thinkingText ?? latestAssistantFallback?.thinkingText;
       logChatDebugMessage(
         buildLoopOutcomeDebugLog(
           {
@@ -126,7 +145,6 @@ export async function runChatLoop(
       break;
     }
 
-    const assistantTextWithoutCalls = stripSkillCalls(result.assistantText);
     await options.emitEvent?.({
       type: "assistant_snapshot",
     });
@@ -155,9 +173,14 @@ export async function runChatLoop(
       );
 
       const startedAt = Date.now();
-      const skillResult = skill
-        ? await executeSkill(skill, call.input)
-        : unavailableSkillResult(call.skillName);
+      const skillResult =
+        call.skillName === DELEGATION_TOOL_NAME && options.executeToolCall
+          ? await options.executeToolCall(call)
+          : call.skillName === DELEGATION_TOOL_NAME
+            ? unavailableDelegationToolResult()
+            : skill
+              ? await executeSkill(skill, call.input)
+              : unavailableSkillResult(call.skillName);
       logChatDebugMessage(
         buildSkillExecutionDebugLog(
           {
@@ -182,6 +205,11 @@ export async function runChatLoop(
         exitCode: skillResult.exitCode,
       });
 
+      latestAssistantFallback = buildAssistantFallback(
+        latestAssistantFallback,
+        skillResult
+      );
+
       conversationTurns.push({
         messageId: `loop-tool-${iteration}-${call.skillName}`,
         sender: "tool",
@@ -199,9 +227,13 @@ export async function runChatLoop(
       relativePath: "in-flight",
     });
 
-    if (iteration === MAX_SKILL_LOOP_ITERATIONS - 1) {
-      finalAssistantText = assistantTextWithoutCalls || result.assistantText;
-      finalThinkingText = result.thinkingText;
+    if (iteration === maxSkillLoopIterations - 1) {
+      finalAssistantText =
+        assistantTextWithoutCalls ||
+        latestAssistantFallback?.assistantText ||
+        "";
+      finalThinkingText =
+        result.thinkingText ?? latestAssistantFallback?.thinkingText;
       logChatDebugMessage(
         buildLoopOutcomeDebugLog(
           {
@@ -229,6 +261,14 @@ export async function runChatLoop(
   };
 }
 
+function getMaxSkillLoopIterations(
+  agentKind: AgentSummary["kind"] | undefined
+): number {
+  return agentKind === "orchestrator"
+    ? MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS
+    : DEFAULT_MAX_SKILL_LOOP_ITERATIONS;
+}
+
 function updateLlmStats(
   totalLlmStats: LlmRequestStats,
   result: StreamChatResult
@@ -248,14 +288,43 @@ function unavailableSkillResult(skillName: string): SkillCallResult {
   };
 }
 
+function unavailableDelegationToolResult(): SkillCallResult {
+  return {
+    skillName: DELEGATION_TOOL_NAME,
+    output: "Delegation tool is not configured in this runtime.",
+    exitCode: 1,
+  };
+}
+
 function buildSkillCallId(iteration: number, skillName: string): string {
   return `skill-call-${iteration + 1}-${skillName}`;
 }
 
+function buildAssistantFallback(
+  current: AssistantFallback | undefined,
+  skillResult: SkillCallResult
+): AssistantFallback | undefined {
+  const assistantText = skillResult.output.trim();
+  if (assistantText) {
+    return { assistantText };
+  }
+
+  if (current) {
+    return current;
+  }
+
+  return {
+    assistantText: `Tool "${skillResult.skillName}" completed with exit code ${skillResult.exitCode}.`,
+  };
+}
+
 export const __testing = {
+  DEFAULT_MAX_SKILL_LOOP_ITERATIONS,
   FINALIZE_AFTER_SKILLS_INSTRUCTION,
-  MAX_SKILL_LOOP_ITERATIONS,
+  MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS,
+  buildAssistantFallback,
   buildSkillCallId,
+  getMaxSkillLoopIterations,
   unavailableSkillResult,
   updateLlmStats,
 };

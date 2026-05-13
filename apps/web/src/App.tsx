@@ -3,6 +3,7 @@ import {
   type ChatSessionSummary,
   type ChatStreamEvent,
   type ChatTurn,
+  createDelegationTool,
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_PRESETS,
   getPresetById,
@@ -2107,6 +2108,12 @@ export default function App() {
     setDraft(draftKey, "");
 
     try {
+      const delegationTool = agentDetailQuery.data
+        ? createDelegationTool({
+            agentTitle: agentDetailQuery.data.title,
+            delegatedAgentIds: agentDetailQuery.data.delegatedAgentIds ?? [],
+          })
+        : undefined;
       await streamChat(
         selectedAgentId,
         {
@@ -2114,6 +2121,7 @@ export default function App() {
           title: thread?.title,
           prompt,
           config: runtimeConfig,
+          tools: delegationTool ? [delegationTool] : [],
         },
         {
           signal: controller.signal,
@@ -2980,6 +2988,9 @@ export default function App() {
                     .replace(/-/g, " ")
                     .replace(/\b\w/g, (letter) => letter.toUpperCase())}
                 </span>
+                {(agentDetailQuery.data?.delegatedAgentIds ?? []).length > 0 ? (
+                  <span className="chip">Tool delegate-task</span>
+                ) : null}
                 {(agentDetailQuery.data?.delegatedAgentIds ?? []).map(
                   (agentId) => (
                     <span className="chip" key={`delegated-${agentId}`}>
