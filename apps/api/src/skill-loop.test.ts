@@ -21,6 +21,115 @@ describe("agentic skill loop", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "skill-test-"));
   });
 
+  it("executes non-delegation tools through the shared runtime tool path", async () => {
+    const executeToolCall = vi.fn().mockResolvedValueOnce({
+      skillName: "load-skill",
+      output:
+        'Loaded skill "release-notes".\nExecutable: yes.\nScope: agent-local.\n\nUse this skill to draft release notes.',
+      exitCode: 0,
+    });
+    const streamChat = vi
+      .fn()
+      .mockResolvedValueOnce({
+        assistantText:
+          '<skill_call name="load-skill">{"skillName":"release-notes"}</skill_call>',
+        llmStats: {
+          recordedAt: "2026-05-14T00:00:00.000Z",
+          model: "google/gemma-4b-it",
+          requestCount: 1,
+          inputTokens: 12,
+          outputTokens: 4,
+          durationMs: 90,
+        },
+      })
+      .mockResolvedValueOnce({
+        assistantText: "I loaded the release-notes skill and can use it now.",
+        llmStats: {
+          recordedAt: "2026-05-14T00:00:01.000Z",
+          model: "google/gemma-4b-it",
+          requestCount: 1,
+          inputTokens: 18,
+          outputTokens: 10,
+          durationMs: 120,
+        },
+      });
+
+    const result = await runChatLoop({
+      agentId: "release-planner",
+      agentPrompt: "Be helpful.",
+      config: {
+        provider: "lmstudio",
+        model: "google/gemma-4b-it",
+        presetId: "gemma4-balanced",
+        lmStudioEnableThinking: true,
+        maxCompletionTokens: 4096,
+        contextWindowSize: 32768,
+        temperature: 0.2,
+        topP: 0.95,
+        disabledSkills: [],
+      },
+      conversationTurns: [
+        {
+          messageId: "turn-1",
+          sender: "user",
+          createdAt: "2026-05-14T00:00:00.000Z",
+          bodyMarkdown: "Figure out how to use the release notes skill.",
+          relativePath: "in-flight",
+        },
+      ],
+      enabledSkills: [
+        {
+          name: "release-notes",
+          description: "Draft release notes",
+          scope: "agent-local",
+          path: "agents/release-planner/skills/release-notes/SKILL.md",
+          sourceRoot: "agents/release-planner/skills",
+          hasScript: true,
+          scriptPath: "agents/release-planner/skills/release-notes/run.sh",
+          content: "Use this skill to draft release notes.",
+        },
+      ],
+      tools: [
+        {
+          name: "load-skill",
+          description:
+            "Load the full SKILL.md instructions for one enabled skill.",
+          parameters: {
+            type: "object",
+          },
+          metadata: {
+            kind: "skill-loader",
+          },
+        },
+      ],
+      sessionId: "session-load-skill",
+      streamChat,
+      executeToolCall,
+    });
+
+    expect(executeToolCall).toHaveBeenCalledWith({
+      skillName: "load-skill",
+      input: '{"skillName":"release-notes"}',
+    });
+    expect(result.assistantText).toBe(
+      "I loaded the release-notes skill and can use it now."
+    );
+    expect(result.conversationTurns).toEqual([
+      expect.objectContaining({
+        sender: "user",
+        bodyMarkdown: "Figure out how to use the release notes skill.",
+      }),
+      expect.objectContaining({
+        sender: "tool",
+        bodyMarkdown: expect.stringContaining('Loaded skill "release-notes".'),
+      }),
+      expect.objectContaining({
+        sender: "system",
+        bodyMarkdown: FINALIZE_AFTER_SKILLS_INSTRUCTION,
+      }),
+    ]);
+  });
+
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });

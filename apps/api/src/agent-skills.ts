@@ -19,6 +19,7 @@ const LEGACY_TOOL_CALL_PATTERN =
   /<\|tool_call>\s*call(?:\s*:\s*|\s+)([A-Za-z0-9_.-]+)([\s\S]*?)(?:<\|tool_call\|>|<tool_call\|>|<\/tool_call>)/g;
 const LEGACY_QUOTE_TOKEN = '<|"|>';
 const SKILL_INPUT_JSON_ENV_KEY = "SKILL_INPUT_JSON";
+export const LOAD_SKILL_TOOL_NAME = "load-skill";
 
 export interface SkillCallRequest {
   skillName: string;
@@ -149,7 +150,12 @@ function buildToolPromptSection(tool: ChatTool): string {
           "Do not simulate delegation by storing notes, writing memory, or calling non-delegation skills as a handoff.",
           'Prefer a JSON body such as {"agentId":"qa-tasker","prompt":"Check the release checklist."} and wait for the returned result before continuing.',
         ].join(" ")
-      : undefined,
+      : metadata.kind === "skill-loader"
+        ? [
+            "Use this tool when you need the exact SKILL.md instructions for a selected skill before deciding how to proceed.",
+            'Prefer a JSON body such as {"skillName":"release-notes"} and wait for the returned content before using that skill.',
+          ].join(" ")
+        : undefined,
     allowedAgentIds.length > 0
       ? `Allowed delegated agents: ${allowedAgentIds.join(", ")}.`
       : undefined,
@@ -221,6 +227,45 @@ export function parseSkillCalls(text: string): SkillCallRequest[] {
   return calls;
 }
 
+export function createLoadSkillTool(
+  enabledSkills: LoadedSkillDocument[]
+): ChatTool | undefined {
+  if (enabledSkills.length === 0) {
+    return undefined;
+  }
+
+  const selectableSkillNames = [
+    ...new Set(enabledSkills.map((skill) => skill.name)),
+  ]
+    .filter((name) => name.trim().length > 0)
+    .sort((left, right) => left.localeCompare(right));
+  if (selectableSkillNames.length === 0) {
+    return undefined;
+  }
+
+  return {
+    name: LOAD_SKILL_TOOL_NAME,
+    description:
+      "Load the full SKILL.md instructions for one enabled skill before using it.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        skillName: {
+          type: "string",
+          enum: selectableSkillNames,
+          description: "The enabled skill name to load.",
+        },
+      },
+      required: ["skillName"],
+    },
+    metadata: {
+      kind: "skill-loader",
+      skillNames: selectableSkillNames,
+    },
+  };
+}
+
 export function stripSkillCalls(text: string): string {
   return text
     .replace(XML_SKILL_CALL_PATTERN, "")
@@ -269,6 +314,46 @@ function normalizeLegacyToolCallInput(input: string): string {
   }
 
   return trimmed;
+}
+
+export function executeLoadSkillTool(
+  enabledSkills: LoadedSkillDocument[],
+  input: string
+): SkillCallResult {
+  const requestedSkillName = parseLoadSkillToolInput(input);
+  if (!requestedSkillName) {
+    return {
+      skillName: LOAD_SKILL_TOOL_NAME,
+      exitCode: 1,
+      output:
+        'Skill loading requires a skill name. Use plain text or JSON such as {"skillName":"release-notes"}.',
+    };
+  }
+
+  const skill = enabledSkills.find(
+    (candidate) => candidate.name === requestedSkillName
+  );
+  if (!skill) {
+    return {
+      skillName: LOAD_SKILL_TOOL_NAME,
+      exitCode: 1,
+      output: `Enabled skill not found: ${requestedSkillName}`,
+    };
+  }
+
+  const lines = [
+    `Loaded skill "${skill.name}".`,
+    `Executable: ${skill.hasScript ? "yes" : "no"}.`,
+    `Scope: ${skill.scope}.`,
+    "",
+    skill.content.trim(),
+  ];
+
+  return {
+    skillName: LOAD_SKILL_TOOL_NAME,
+    exitCode: 0,
+    output: lines.join("\n").trim(),
+  };
 }
 
 function parseLegacyValue(value: string): unknown {
@@ -371,6 +456,21 @@ function unwrapLegacyQuotedString(value: string): string | undefined {
     );
   }
   return undefined;
+}
+
+function parseLoadSkillToolInput(input: string): string | undefined {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = tryParseJson(trimmed);
+  if (isJsonObject(parsed) && typeof parsed.skillName === "string") {
+    const skillName = parsed.skillName.trim();
+    return skillName.length > 0 ? skillName : undefined;
+  }
+
+  return trimmed;
 }
 
 function tryParseJson(value: string): unknown {
@@ -959,12 +1059,15 @@ function formatSkillProcessResult(
 export const __testing = {
   buildCliArgsFromObject,
   buildExecutableSkillInstructions,
+  createLoadSkillTool,
   buildSkillsPromptSections,
   buildToolPromptSections,
   buildStructuredSkillInput,
+  executeLoadSkillTool,
   extractSingleValuePositionalArg,
   normalizeCliFlagName,
   normalizeLegacyToolCallInput,
+  parseLoadSkillToolInput,
   parseCliInputArgs,
   parseSkillCalls,
   shouldRetryWithSinglePositionalArg,

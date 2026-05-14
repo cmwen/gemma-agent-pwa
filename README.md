@@ -237,6 +237,7 @@ The repository includes a GitHub Actions workflow that publishes `apps/web/dist`
 
 - Agent prompts are composed from `AGENT.md`, `SOUL.md`, and enabled skill documents in `min-kb-store`.
 - Skills remain file-based `SKILL.md` bundles; executable skills can use the legacy top-level `run.*` convention or a single script inside `scripts/` for compatibility with the open Agent Skills layout.
+- The API exposes a built-in `load-skill` runtime tool so Gemma can fetch the full `SKILL.md` body for any enabled skill on demand instead of relying only on the compact prompt summary.
 - Structured JSON skill-call bodies are forwarded to executable skills through stdin/env and translated into CLI flags like `--field value` for better compatibility with legacy scripts; single-field JSON inputs can also fall back to a positional argument when a skill rejects unknown flags.
 - The API skill loop now strips transient tool-call/planning text from the live chat, supports legacy Agent Skills `<|tool_call|>` blocks, and can continue across multiple skill iterations before producing the final plain-language answer.
 - Sessions are stored in the canonical `SESSION.md` + `turns/*.md` format.

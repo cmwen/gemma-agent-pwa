@@ -397,6 +397,41 @@ describe("lmstudio parsing", () => {
     expect(prompt).not.toContain("Description:");
   });
 
+  it("includes load-skill guidance when the built-in skill loader tool is available", () => {
+    const prompt = __testing.buildSystemPrompt(
+      "Follow the agent contract.",
+      [
+        {
+          name: "search-store",
+          description: "Search notes by title or content.",
+          scope: "agent-local",
+          path: "agents/logseq/skills/search-store/SKILL.md",
+          sourceRoot: "agents/logseq/skills",
+          hasScript: true,
+          scriptPath:
+            "agents/logseq/skills/search-store/scripts/search_store.py",
+          content: "Search notes by title or content.",
+        } satisfies LoadedSkillDocument,
+      ],
+      [
+        {
+          name: "load-skill",
+          description:
+            "Load the full SKILL.md instructions for one enabled skill before using it.",
+          parameters: {
+            type: "object",
+          },
+          metadata: {
+            kind: "skill-loader",
+          },
+        },
+      ]
+    );
+
+    expect(prompt).toContain("### load-skill");
+    expect(prompt).toContain("exact SKILL.md instructions");
+  });
+
   it("injects model-specific delegation guidance for Gemma 4 selections", () => {
     const delegationTool = {
       name: "delegate-task",

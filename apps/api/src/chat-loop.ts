@@ -171,16 +171,21 @@ export async function runChatLoop(
       const skill = options.enabledSkills.find(
         (candidate) => candidate.name === call.skillName && candidate.hasScript
       );
+      const tool = (options.tools ?? []).find(
+        (candidate) => candidate.name === call.skillName
+      );
 
       const startedAt = Date.now();
       const skillResult =
-        call.skillName === DELEGATION_TOOL_NAME && options.executeToolCall
+        tool && options.executeToolCall
           ? await options.executeToolCall(call)
-          : call.skillName === DELEGATION_TOOL_NAME
-            ? unavailableDelegationToolResult()
-            : skill
-              ? await executeSkill(skill, call.input)
-              : unavailableSkillResult(call.skillName);
+          : tool
+            ? unavailableToolResult(call.skillName)
+            : call.skillName === DELEGATION_TOOL_NAME
+              ? unavailableDelegationToolResult()
+              : skill
+                ? await executeSkill(skill, call.input)
+                : unavailableSkillResult(call.skillName);
       logChatDebugMessage(
         buildSkillExecutionDebugLog(
           {
@@ -296,6 +301,14 @@ function unavailableDelegationToolResult(): SkillCallResult {
   };
 }
 
+function unavailableToolResult(toolName: string): SkillCallResult {
+  return {
+    skillName: toolName,
+    output: `Tool "${toolName}" is not available in this runtime.`,
+    exitCode: 1,
+  };
+}
+
 function buildSkillCallId(iteration: number, skillName: string): string {
   return `skill-call-${iteration + 1}-${skillName}`;
 }
@@ -326,5 +339,6 @@ export const __testing = {
   buildSkillCallId,
   getMaxSkillLoopIterations,
   unavailableSkillResult,
+  unavailableToolResult,
   updateLlmStats,
 };

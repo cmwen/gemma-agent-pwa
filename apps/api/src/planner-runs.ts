@@ -26,6 +26,7 @@ import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
 import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
+import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 export function registerPlannerRunRoutes(
   app: Hono,
@@ -274,7 +275,10 @@ async function executePlannerTask(
     agentTitle: taskerAgent.title,
     delegatedAgentIds: taskerAgent.delegatedAgentIds ?? [],
   });
-  const tools = delegationTool ? [delegationTool] : [];
+  const tools = buildRuntimeTools({
+    enabledSkills,
+    delegationTool,
+  });
   const loopResult = await runChatLoop({
     agentId: task.taskerAgentId,
     agentKind: taskerAgent.kind,
@@ -285,17 +289,21 @@ async function executePlannerTask(
     tools,
     sessionId: userThread.sessionId,
     executeToolCall: (call) =>
-      executeDelegatedAgentTool(
-        workspace,
-        {
-          allowedAgentIds: taskerAgent.delegatedAgentIds ?? [],
-          parentAgentId: task.taskerAgentId,
-          parentSessionId: userThread.sessionId,
-          parentAgentTitle: taskerAgent.title,
-          parentConfig: runtimeConfig,
-        },
-        call.input
-      ),
+      executeRuntimeToolCall(call, {
+        enabledSkills,
+        executeDelegation: (callInput) =>
+          executeDelegatedAgentTool(
+            workspace,
+            {
+              allowedAgentIds: taskerAgent.delegatedAgentIds ?? [],
+              parentAgentId: task.taskerAgentId,
+              parentSessionId: userThread.sessionId,
+              parentAgentTitle: taskerAgent.title,
+              parentConfig: runtimeConfig,
+            },
+            callInput
+          ),
+      }),
   });
   const assistantSummary = summarizeThread(loopResult.assistantText);
   await saveChatTurn(workspace, {

@@ -14,6 +14,7 @@ import type { SkillCallRequest, SkillCallResult } from "./agent-skills.js";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
 import { listAvailableModels } from "./llm-provider.js";
+import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 interface DelegationToolInput {
   agentId: string;
@@ -88,7 +89,10 @@ export async function executeDelegatedAgentTool(
     agentTitle: targetAgent.title,
     delegatedAgentIds: targetAgent.delegatedAgentIds ?? [],
   });
-  const tools = delegationTool ? [delegationTool] : [];
+  const tools = buildRuntimeTools({
+    enabledSkills,
+    delegationTool,
+  });
   const loopResult = await runChatLoop({
     agentId: targetAgent.id,
     agentKind: targetAgent.kind,
@@ -98,7 +102,17 @@ export async function executeDelegatedAgentTool(
     enabledSkills,
     tools,
     sessionId: userThread.sessionId,
-    executeToolCall: input.executeToolCall,
+    executeToolCall: (call) =>
+      executeRuntimeToolCall(call, {
+        enabledSkills,
+        executeDelegation: input.executeToolCall
+          ? (callInput) =>
+              input.executeToolCall?.({
+                skillName: call.skillName,
+                input: callInput,
+              })
+          : undefined,
+      }),
   });
   const assistantSummary = summarizeThread(loopResult.assistantText);
   await saveChatTurn(workspace, {

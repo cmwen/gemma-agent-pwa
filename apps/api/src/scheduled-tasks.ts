@@ -30,6 +30,7 @@ import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
 import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
+import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 const RUN_HISTORY_LIMIT = 20;
 const SCHEDULER_MIN_INTERVAL_MS = 30_000;
@@ -427,7 +428,10 @@ async function executeScheduledChat(
     agentTitle: agent.title,
     delegatedAgentIds: agent.delegatedAgentIds ?? [],
   });
-  const tools = delegationTool ? [delegationTool] : [];
+  const tools = buildRuntimeTools({
+    enabledSkills,
+    delegationTool,
+  });
   const loopResult = await runChatLoop({
     agentId: task.agentId,
     agentKind: agent.kind,
@@ -438,17 +442,21 @@ async function executeScheduledChat(
     tools,
     sessionId: userThread.sessionId,
     executeToolCall: (call) =>
-      executeDelegatedAgentTool(
-        workspace,
-        {
-          allowedAgentIds: agent.delegatedAgentIds ?? [],
-          parentAgentId: task.agentId,
-          parentSessionId: userThread.sessionId,
-          parentAgentTitle: agent.title,
-          parentConfig: runtimeConfig,
-        },
-        call.input
-      ),
+      executeRuntimeToolCall(call, {
+        enabledSkills,
+        executeDelegation: (callInput) =>
+          executeDelegatedAgentTool(
+            workspace,
+            {
+              allowedAgentIds: agent.delegatedAgentIds ?? [],
+              parentAgentId: task.agentId,
+              parentSessionId: userThread.sessionId,
+              parentAgentTitle: agent.title,
+              parentConfig: runtimeConfig,
+            },
+            callInput
+          ),
+      }),
   });
   await saveChatTurn(workspace, {
     agentId: task.agentId,

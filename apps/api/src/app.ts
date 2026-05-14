@@ -64,6 +64,7 @@ import {
   forwardSpeechUpstreamError,
   getSpeechHealthStatus,
 } from "./speech-errors.js";
+import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 const defaultSpeechServiceBaseUrl = "http://127.0.0.1:8790";
 const DEFAULT_NEW_CHAT_TITLE = "New Gemma chat";
@@ -320,11 +321,11 @@ export function createApiApp(workspace: MinKbWorkspace) {
       agentTitle: agent.title,
       delegatedAgentIds: agent.delegatedAgentIds ?? [],
     });
-    const toolsByName = new Map(input.tools.map((tool) => [tool.name, tool]));
-    if (delegationTool) {
-      toolsByName.set(delegationTool.name, delegationTool);
-    }
-    const tools = [...toolsByName.values()];
+    const tools = buildRuntimeTools({
+      enabledSkills,
+      extraTools: input.tools,
+      delegationTool,
+    });
     logChatDebugMessage(
       buildChatRequestDebugLog({
         agentId,
@@ -384,17 +385,21 @@ export function createApiApp(workspace: MinKbWorkspace) {
           tools,
           sessionId: userThread.sessionId,
           executeToolCall: (call) =>
-            executeDelegatedAgentTool(
-              workspace,
-              {
-                allowedAgentIds: agent.delegatedAgentIds ?? [],
-                parentAgentId: agentId,
-                parentSessionId: userThread.sessionId,
-                parentAgentTitle: agent.title,
-                parentConfig: mergedConfig,
-              },
-              call.input
-            ),
+            executeRuntimeToolCall(call, {
+              enabledSkills,
+              executeDelegation: (callInput) =>
+                executeDelegatedAgentTool(
+                  workspace,
+                  {
+                    allowedAgentIds: agent.delegatedAgentIds ?? [],
+                    parentAgentId: agentId,
+                    parentSessionId: userThread.sessionId,
+                    parentAgentTitle: agent.title,
+                    parentConfig: mergedConfig,
+                  },
+                  callInput
+                ),
+            }),
           emitEvent: (event) => agUiStream.apply(event),
         });
 

@@ -3,13 +3,16 @@ import { __testing, parseSkillCalls, stripSkillCalls } from "./agent-skills.js";
 
 const {
   buildExecutableSkillInstructions,
+  createLoadSkillTool,
   buildSkillsPromptSections,
   buildToolPromptSections,
   buildCliArgsFromObject,
   buildStructuredSkillInput,
+  executeLoadSkillTool,
   extractSingleValuePositionalArg,
   normalizeCliFlagName,
   normalizeLegacyToolCallInput,
+  parseLoadSkillToolInput,
   parseCliInputArgs,
   resolveInterpreter,
   shouldRetryWithSinglePositionalArg,
@@ -238,6 +241,32 @@ describe("structured skill input helpers", () => {
       expect(sections).toContain("### delegate-task");
       expect(sections).toContain("Allowed delegated agents: qa-tasker.");
     });
+
+    it("describes the built-in load-skill tool as an instruction loader", () => {
+      const tool = createLoadSkillTool([
+        {
+          name: "release-notes",
+          description: "Draft release notes",
+          scope: "agent-local" as const,
+          path: "/fake/SKILL.md",
+          sourceRoot: "/fake",
+          hasScript: true,
+          scriptPath: "/fake/run.sh",
+          content: "Use this skill to draft release notes.",
+        },
+      ]);
+
+      expect(tool).toBeDefined();
+      expect(tool?.parameters).toMatchObject({
+        type: "object",
+        required: ["skillName"],
+      });
+
+      const sections = buildToolPromptSections(tool ? [tool] : []);
+      expect(sections).toContain("### load-skill");
+      expect(sections).toContain("exact SKILL.md instructions");
+      expect(sections).toContain('{"skillName":"release-notes"}');
+    });
   });
 
   it("converts JSON object input into CLI arguments", () => {
@@ -410,6 +439,60 @@ describe("executeSkillScript", () => {
     const result = await executeSkillScript(skill, "test input");
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain("no executable script");
+  });
+
+  describe("executeLoadSkillTool", () => {
+    const enabledSkills = [
+      {
+        name: "release-notes",
+        description: "Draft release notes",
+        scope: "agent-local" as const,
+        path: "/fake/SKILL.md",
+        sourceRoot: "/fake",
+        hasScript: true,
+        scriptPath: "/fake/run.sh",
+        content:
+          "Use this skill to draft release notes from the shipped changes.",
+      },
+    ];
+
+    it("accepts JSON input and returns full skill guidance", () => {
+      expect(parseLoadSkillToolInput('{"skillName":"release-notes"}')).toBe(
+        "release-notes"
+      );
+
+      expect(
+        executeLoadSkillTool(enabledSkills, '{"skillName":"release-notes"}')
+      ).toEqual({
+        skillName: "load-skill",
+        exitCode: 0,
+        output: [
+          'Loaded skill "release-notes".',
+          "Executable: yes.",
+          "Scope: agent-local.",
+          "",
+          "Use this skill to draft release notes from the shipped changes.",
+        ].join("\n"),
+      });
+    });
+
+    it("accepts plain-text skill names", () => {
+      expect(
+        executeLoadSkillTool(enabledSkills, "release-notes")
+      ).toMatchObject({
+        skillName: "load-skill",
+        exitCode: 0,
+      });
+    });
+
+    it("returns an error when no skill name is provided", () => {
+      expect(executeLoadSkillTool(enabledSkills, "")).toEqual({
+        skillName: "load-skill",
+        exitCode: 1,
+        output:
+          'Skill loading requires a skill name. Use plain text or JSON such as {"skillName":"release-notes"}.',
+      });
+    });
   });
 });
 

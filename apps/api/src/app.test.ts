@@ -39,6 +39,9 @@ vi.mock("@gemma-agent-pwa/min-kb-bridge", async (importOriginal) => {
 });
 
 vi.mock("./agent-skills.js", () => ({
+  createLoadSkillTool: vi.fn().mockReturnValue(undefined),
+  executeLoadSkillTool: vi.fn(),
+  LOAD_SKILL_TOOL_NAME: "load-skill",
   loadAgentSkills: mocks.loadAgentSkills,
 }));
 
