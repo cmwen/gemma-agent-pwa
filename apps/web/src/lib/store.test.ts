@@ -9,6 +9,7 @@ import {
 beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
   useAppStore.setState({
+    selectedWorkspaceId: "default",
     selectedAgentId: undefined,
     selectedSessionIds: {},
     lastScheduledRunNotifications: {},
@@ -27,17 +28,19 @@ afterEach(() => {
 
 describe("session selection helpers", () => {
   it("treats a cleared session as an explicit stored selection", () => {
-    expect(hasStoredSessionSelection({ "agent-1": null }, "agent-1")).toBe(
+    expect(
+      hasStoredSessionSelection({ "default:agent-1": null }, "default", "agent-1")
+    ).toBe(
       true
     );
     expect(
-      getSelectedSessionId({ "agent-1": null }, "agent-1")
+      getSelectedSessionId({ "default:agent-1": null }, "default", "agent-1")
     ).toBeUndefined();
   });
 
   it("distinguishes missing selection state from a cleared draft chat", () => {
-    expect(hasStoredSessionSelection({}, "agent-1")).toBe(false);
-    expect(getSelectedSessionId({}, "agent-1")).toBeUndefined();
+    expect(hasStoredSessionSelection({}, "default", "agent-1")).toBe(false);
+    expect(getSelectedSessionId({}, "default", "agent-1")).toBeUndefined();
   });
 });
 
@@ -97,8 +100,9 @@ describe("persisted app state", () => {
         drafts: {
           "agent-1:new": "Draft that should stay in memory only.",
         },
+        selectedWorkspaceId: "test",
         selectedAgentId: "agent-1",
-        selectedSessionIds: { "agent-1": "session-1" },
+        selectedSessionIds: { "test:agent-1": "session-1" },
         lastScheduledRunNotifications: { "schedule-1": "run-1" },
         themeMode: "light",
         modelDetailsOpen: true,
@@ -107,8 +111,9 @@ describe("persisted app state", () => {
         handsFreeVoiceTurns: false,
       })
     ).toEqual({
+      selectedWorkspaceId: "test",
       selectedAgentId: "agent-1",
-      selectedSessionIds: { "agent-1": "session-1" },
+      selectedSessionIds: { "test:agent-1": "session-1" },
       lastScheduledRunNotifications: { "schedule-1": "run-1" },
       themeMode: "light",
       modelDetailsOpen: true,

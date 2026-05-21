@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   type ChatRuntimeConfig,
-  createDelegationTool,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
@@ -20,24 +19,26 @@ import {
   recordSessionLlmUsage,
   saveChatTurn,
   upsertPlannerRun,
+  type WorkspaceRegistry,
 } from "@gemma-agent-pwa/min-kb-bridge";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
-import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
 import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 export function registerPlannerRunRoutes(
   app: Hono,
-  workspace: MinKbWorkspace
+  workspaces: WorkspaceRegistry
 ): void {
   app.get("/api/planner-runs", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const plannerAgentId = context.req.query("plannerAgentId");
     return context.json(await listPlannerRuns(workspace, plannerAgentId));
   });
 
   app.post("/api/planner-runs", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const input = plannerRunCreateSchema.parse(
       (await context.req.json()) ?? {}
     );
@@ -51,6 +52,7 @@ export function registerPlannerRunRoutes(
   });
 
   app.get("/api/planner-runs/:plannerAgentId/:runId", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const plannerAgentId = context.req.param("plannerAgentId");
     await requireAgent(workspace, plannerAgentId);
     const run = await requirePlannerRun(
@@ -64,6 +66,7 @@ export function registerPlannerRunRoutes(
   app.post(
     "/api/planner-runs/:plannerAgentId/:runId/execute",
     async (context) => {
+      const workspace = resolveRequestWorkspace(context, workspaces);
       const plannerAgentId = context.req.param("plannerAgentId");
       await requireAgent(workspace, plannerAgentId);
       const run = await requirePlannerRun(
@@ -78,6 +81,7 @@ export function registerPlannerRunRoutes(
   app.post(
     "/api/planner-runs/:plannerAgentId/:runId/resume",
     async (context) => {
+      const workspace = resolveRequestWorkspace(context, workspaces);
       const plannerAgentId = context.req.param("plannerAgentId");
       await requireAgent(workspace, plannerAgentId);
       const run = await requirePlannerRun(
@@ -271,13 +275,8 @@ async function executePlannerTask(
     task.taskerAgentId,
     runtimeConfig.disabledSkills
   );
-  const delegationTool = createDelegationTool({
-    agentTitle: taskerAgent.title,
-    delegatedAgentIds: taskerAgent.delegatedAgentIds ?? [],
-  });
   const tools = buildRuntimeTools({
     enabledSkills,
-    delegationTool,
   });
   const loopResult = await runChatLoop({
     agentId: task.taskerAgentId,
@@ -291,18 +290,6 @@ async function executePlannerTask(
     executeToolCall: (call) =>
       executeRuntimeToolCall(call, {
         enabledSkills,
-        executeDelegation: (callInput) =>
-          executeDelegatedAgentTool(
-            workspace,
-            {
-              allowedAgentIds: taskerAgent.delegatedAgentIds ?? [],
-              parentAgentId: task.taskerAgentId,
-              parentSessionId: userThread.sessionId,
-              parentAgentTitle: taskerAgent.title,
-              parentConfig: runtimeConfig,
-            },
-            callInput
-          ),
       }),
   });
   const assistantSummary = summarizeThread(loopResult.assistantText);
@@ -412,3 +399,19 @@ export const __testing = {
   createPlannerRun,
   normalizeIdPart,
 };
+
+function resolveRequestWorkspace(
+  context: Context,
+  workspaces: WorkspaceRegistry
+): MinKbWorkspace {
+  const requestedWorkspaceId = context.req.query("workspace");
+  const workspace = workspaces.get(requestedWorkspaceId ?? "default");
+  if (!workspace) {
+    const fallbackWorkspace = workspaces.get("default");
+    if (!fallbackWorkspace) {
+      throw new Error('Workspace registry must include a "default" workspace.');
+    }
+    return fallbackWorkspace;
+  }
+  return workspace;
+}

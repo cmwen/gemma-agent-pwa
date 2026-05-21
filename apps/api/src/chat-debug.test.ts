@@ -143,8 +143,10 @@ describe("loop and skill observability logs", () => {
       agentKind: "chat",
       delegatedAgentIds: ["qa-tasker"],
       executableSkillCount: 1,
+      requestedToolNames: ["delegate-task", "load-skill"],
       skillNames: ["search-store", "read-memory"],
-      toolNames: ["delegate-task"],
+      toolNames: ["load-skill"],
+      droppedToolNames: ["delegate-task"],
     });
 
     expect(message.level).toBe("info");
@@ -153,7 +155,11 @@ describe("loop and skill observability logs", () => {
     expect(message.text).toContain("Loaded\n2");
     expect(message.text).toContain("Executable\n1");
     expect(message.text).toContain("search-store, read-memory");
-    expect(message.text).toContain("Tools\ndelegate-task");
+    expect(message.text).toContain(
+      "Requested tools\ndelegate-task, load-skill"
+    );
+    expect(message.text).toContain("Tools\nload-skill");
+    expect(message.text).toContain("Dropped tools\ndelegate-task");
     expect(message.text).toContain("Delegation targets\nqa-tasker");
   });
 });

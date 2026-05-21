@@ -107,7 +107,7 @@ describe("getAgentById", () => {
     expect(agent?.combinedPrompt).not.toContain("metadata: hidden");
   });
 
-  it("loads orchestrator metadata and delegation targets from AGENT frontmatter", async () => {
+  it("treats legacy orchestrator metadata as chat while preserving configured delegates", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-store-"));
     createdRoots.push(root);
     const workspace = createWorkspace(root);
@@ -152,16 +152,10 @@ describe("getAgentById", () => {
     ]);
 
     const agent = await getAgentById(workspace, "release-planner");
-    expect(agent?.kind).toBe("orchestrator");
+    expect(agent?.kind).toBe("chat");
     expect(agent?.delegatedAgentIds).toEqual(["release-tasker", "qa-tasker"]);
-    expect(agent?.combinedPrompt).toContain("## Execution mode");
-    expect(agent?.combinedPrompt).toContain("Agent type: orchestrator");
-    expect(agent?.combinedPrompt).toContain(
-      "Delegation is available through the `delegate-task` tool."
-    );
-    expect(agent?.combinedPrompt).toContain(
-      "Allowed delegated agents: release-tasker, qa-tasker."
-    );
+    expect(agent?.combinedPrompt).not.toContain("## Execution mode");
+    expect(agent?.combinedPrompt).not.toContain("delegate-task");
   });
 
   it("does not default orchestrator delegation targets to every other agent", async () => {
@@ -201,10 +195,9 @@ describe("getAgentById", () => {
 
     const agent = await getAgentById(workspace, "release-planner");
 
+    expect(agent?.kind).toBe("chat");
     expect(agent?.delegatedAgentIds).toEqual([]);
-    expect(agent?.combinedPrompt).toContain(
-      "Delegation is not configured for this agent."
-    );
+    expect(agent?.combinedPrompt).not.toContain("## Execution mode");
   });
 
   it("defaults planner delegation targets to the other agents in the workspace", async () => {
@@ -246,12 +239,7 @@ describe("getAgentById", () => {
 
     expect(agent?.kind).toBe("planner");
     expect(agent?.delegatedAgentIds).toEqual(["scene-writer", "story-editor"]);
-    expect(agent?.combinedPrompt).toContain(
-      "Delegation is available through the `delegate-task` tool."
-    );
-    expect(agent?.combinedPrompt).toContain(
-      "Allowed delegated agents: scene-writer, story-editor."
-    );
+    expect(agent?.combinedPrompt).not.toContain("delegate-task");
   });
 
   it("defaults chat delegation targets to the other agents in the workspace", async () => {
@@ -292,13 +280,7 @@ describe("getAgentById", () => {
 
     expect(agent?.kind).toBe("chat");
     expect(agent?.delegatedAgentIds).toEqual(["scene-writer", "story-editor"]);
-    expect(agent?.combinedPrompt).toContain("Agent type: chat");
-    expect(agent?.combinedPrompt).toContain(
-      "Delegation is available through the `delegate-task` tool."
-    );
-    expect(agent?.combinedPrompt).toContain(
-      "Allowed delegated agents: scene-writer, story-editor."
-    );
+    expect(agent?.combinedPrompt).not.toContain("## Execution mode");
   });
 });
 

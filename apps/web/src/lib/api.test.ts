@@ -1,16 +1,15 @@
-import {
-  type ChatRequest,
-  type ChatSession,
-  createDelegationTool,
-} from "@gemma-agent-pwa/contracts";
+import type { ChatRequest, ChatSession } from "@gemma-agent-pwa/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   createScheduledTask,
   deleteScheduledTask as deleteScheduledTaskRequest,
   deleteSession,
+  getHealth,
   getScheduledTasks,
   getSessions,
+  getWorkspaces,
+  processSpeechText,
   restoreSession,
   runScheduledTask,
   streamChat,
@@ -24,6 +23,62 @@ afterEach(() => {
 });
 
 describe("session API helpers", () => {
+  it("lists configured workspaces", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          defaultId: "default",
+          workspaces: [],
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+
+    await getWorkspaces();
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/workspaces", undefined);
+  });
+
+  it("threads the workspace query parameter for scoped health requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          workspace: {
+            id: "test",
+            storeRoot: "/tmp/test-store",
+            copilotConfigDir: "/tmp/.copilot",
+            storeSkillDirectory: "/tmp/test-store/skills",
+            copilotSkillDirectory: "/tmp/.copilot/skills",
+            agentCount: 2,
+          },
+          lmStudioReachable: true,
+          speechReachable: false,
+          modelCount: 0,
+          message: "ok",
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+
+    await getHealth("test");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/health?workspace=test",
+      undefined
+    );
+  });
+
   it("requests the selected session list state", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("[]", {
@@ -99,6 +154,24 @@ describe("scheduled task API helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agents/release-planner/schedules",
+      undefined
+    );
+  });
+
+  it("scopes scheduled task listing to a non-default workspace", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      })
+    );
+
+    await getScheduledTasks("release-planner", "test");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agents/release-planner/schedules?workspace=test",
       undefined
     );
   });
@@ -294,6 +367,59 @@ describe("speech API helpers", () => {
       })
     ).rejects.toThrow(
       "Speech synthesis failed because min-speech-service at http://127.0.0.1:8790 is unreachable (connection to 127.0.0.1:8790 was refused). Start min-speech-service or update MIN_SPEECH_SERVICE_URL."
+    );
+  });
+
+  it("posts text-processing requests for cleaned voice prompts", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sourceText: "um can you email the summary",
+          detectedLanguage: "en",
+          intent: "Ask to email the summary",
+          cleanedText: "can you email the summary",
+          rewrittenText: "Can you email the summary?",
+          translatedText: "Can you email the summary?",
+          targetLanguage: "en",
+          fillerWords: ["um"],
+          model: "gemma-4-e4b",
+          provider: "openai-compatible",
+          raw: {
+            detectedLanguage: "en",
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+
+    const result = await processSpeechText(
+      {
+        input: "um can you email the summary",
+      },
+      {
+        signal: controller.signal,
+      }
+    );
+
+    expect(result).toMatchObject({
+      intent: "Ask to email the summary",
+      rewrittenText: "Can you email the summary?",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/speech/npl",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        signal: controller.signal,
+      })
     );
   });
 });
@@ -558,7 +684,7 @@ describe("AG-UI chat streaming", () => {
     ]);
   });
 
-  it("includes delegation tools in the AG-UI request payload", async () => {
+  it("forwards custom tools in the AG-UI request payload", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
@@ -569,19 +695,13 @@ describe("AG-UI chat streaming", () => {
       );
 
     await streamChat(
-      "release-orchestrator",
+      "release-planner",
       buildChatRequest({
         tools: [
-          (() => {
-            const delegationTool = createDelegationTool({
-              agentTitle: "Release Orchestrator",
-              delegatedAgentIds: ["qa-tasker"],
-            });
-            if (!delegationTool) {
-              throw new Error("Expected delegation tool.");
-            }
-            return delegationTool;
-          })(),
+          {
+            name: "search-store",
+            description: "Search project notes.",
+          },
         ],
       }),
       {
@@ -597,8 +717,8 @@ describe("AG-UI chat streaming", () => {
     >;
     expect(body.tools).toEqual([
       expect.objectContaining({
-        name: "delegate-task",
-        description: expect.stringContaining("Important delegation tool"),
+        name: "search-store",
+        description: "Search project notes.",
       }),
     ]);
   });

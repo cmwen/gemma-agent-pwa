@@ -20,8 +20,11 @@ import type {
   SessionListState,
   SpeechCapabilities,
   SpeechSynthesisRequest,
+  TextProcessingRequest,
+  TextProcessingResult,
   TranscriptionOptions,
   TranscriptionResult,
+  WorkspaceListing,
 } from "@gemma-agent-pwa/contracts";
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ?? "/api";
@@ -57,8 +60,12 @@ const PARTIAL_SKILL_CALL_MARKERS = [
   "<tool_call",
 ];
 
-export async function getHealth(): Promise<HealthStatus> {
-  return fetchJson<HealthStatus>(`${API_ROOT}/health`);
+export async function getWorkspaces(): Promise<WorkspaceListing> {
+  return fetchJson<WorkspaceListing>(buildApiUrl("/workspaces"));
+}
+
+export async function getHealth(workspaceId?: string): Promise<HealthStatus> {
+  return fetchJson<HealthStatus>(buildApiUrl("/health", { workspaceId }));
 }
 
 export async function getModels(): Promise<ModelDescriptor[]> {
@@ -69,48 +76,60 @@ export async function getSpeechCapabilities(): Promise<SpeechCapabilities> {
   return fetchJson<SpeechCapabilities>(`${API_ROOT}/speech/capabilities`);
 }
 
-export async function getAgents(): Promise<AgentSummary[]> {
-  return fetchJson<AgentSummary[]>(`${API_ROOT}/agents`);
+export async function getAgents(workspaceId?: string): Promise<AgentSummary[]> {
+  return fetchJson<AgentSummary[]>(buildApiUrl("/agents", { workspaceId }));
 }
 
-export async function getAgent(agentId: string): Promise<AgentSummary> {
-  return fetchJson<AgentSummary>(`${API_ROOT}/agents/${agentId}`);
+export async function getAgent(
+  agentId: string,
+  workspaceId?: string
+): Promise<AgentSummary> {
+  return fetchJson<AgentSummary>(
+    buildApiUrl(`/agents/${agentId}`, { workspaceId })
+  );
 }
 
 export async function getSessions(
   agentId: string,
-  state: SessionListState = "active"
+  state: SessionListState = "active",
+  workspaceId?: string
 ): Promise<ChatSessionSummary[]> {
   return fetchJson<ChatSessionSummary[]>(
-    `${API_ROOT}/agents/${agentId}/sessions?state=${encodeURIComponent(state)}`
+    buildApiUrl(`/agents/${agentId}/sessions`, {
+      searchParams: [["state", state]],
+      workspaceId,
+    })
   );
 }
 
 export async function getSession(
   agentId: string,
-  sessionId: string
+  sessionId: string,
+  workspaceId?: string
 ): Promise<ChatSession> {
   return fetchJson<ChatSession>(
-    `${API_ROOT}/agents/${agentId}/sessions/${sessionId}`
+    buildApiUrl(`/agents/${agentId}/sessions/${sessionId}`, { workspaceId })
   );
 }
 
 export async function getScheduledTasks(
-  agentId?: string
+  agentId?: string,
+  workspaceId?: string
 ): Promise<ScheduledTask[]> {
   return fetchJson<ScheduledTask[]>(
     agentId
-      ? `${API_ROOT}/agents/${agentId}/schedules`
-      : `${API_ROOT}/schedules`
+      ? buildApiUrl(`/agents/${agentId}/schedules`, { workspaceId })
+      : buildApiUrl("/schedules", { workspaceId })
   );
 }
 
 export async function createScheduledTask(
   agentId: string,
-  input: ScheduledTaskCreate
+  input: ScheduledTaskCreate,
+  workspaceId?: string
 ): Promise<ScheduledTask> {
   return fetchJsonWithInit<ScheduledTask>(
-    `${API_ROOT}/agents/${agentId}/schedules`,
+    buildApiUrl(`/agents/${agentId}/schedules`, { workspaceId }),
     {
       method: "POST",
       headers: {
@@ -124,10 +143,11 @@ export async function createScheduledTask(
 export async function updateScheduledTask(
   agentId: string,
   taskId: string,
-  input: ScheduledTaskUpdate
+  input: ScheduledTaskUpdate,
+  workspaceId?: string
 ): Promise<ScheduledTask> {
   return fetchJsonWithInit<ScheduledTask>(
-    `${API_ROOT}/agents/${agentId}/schedules/${taskId}`,
+    buildApiUrl(`/agents/${agentId}/schedules/${taskId}`, { workspaceId }),
     {
       method: "PATCH",
       headers: {
@@ -140,10 +160,13 @@ export async function updateScheduledTask(
 
 export async function runScheduledTask(
   agentId: string,
-  taskId: string
+  taskId: string,
+  workspaceId?: string
 ): Promise<ScheduledTask> {
   return fetchJsonWithInit<ScheduledTask>(
-    `${API_ROOT}/agents/${agentId}/schedules/${taskId}/run`,
+    buildApiUrl(`/agents/${agentId}/schedules/${taskId}/run`, {
+      workspaceId,
+    }),
     {
       method: "POST",
     }
@@ -152,20 +175,28 @@ export async function runScheduledTask(
 
 export async function deleteScheduledTask(
   agentId: string,
-  taskId: string
+  taskId: string,
+  workspaceId?: string
 ): Promise<void> {
-  await fetchOk(`${API_ROOT}/agents/${agentId}/schedules/${taskId}`, {
-    method: "DELETE",
-  });
+  await fetchOk(
+    buildApiUrl(`/agents/${agentId}/schedules/${taskId}`, { workspaceId }),
+    {
+      method: "DELETE",
+    }
+  );
 }
 
 export async function deleteSession(
   agentId: string,
   sessionId: string,
-  mode: SessionDeleteMode
+  mode: SessionDeleteMode,
+  workspaceId?: string
 ): Promise<void> {
   await fetchOk(
-    `${API_ROOT}/agents/${agentId}/sessions/${sessionId}?mode=${encodeURIComponent(mode)}`,
+    buildApiUrl(`/agents/${agentId}/sessions/${sessionId}`, {
+      searchParams: [["mode", mode]],
+      workspaceId,
+    }),
     {
       method: "DELETE",
     }
@@ -174,11 +205,17 @@ export async function deleteSession(
 
 export async function restoreSession(
   agentId: string,
-  sessionId: string
+  sessionId: string,
+  workspaceId?: string
 ): Promise<void> {
-  await fetchOk(`${API_ROOT}/agents/${agentId}/sessions/${sessionId}/restore`, {
-    method: "POST",
-  });
+  await fetchOk(
+    buildApiUrl(`/agents/${agentId}/sessions/${sessionId}/restore`, {
+      workspaceId,
+    }),
+    {
+      method: "POST",
+    }
+  );
 }
 
 export async function transcribeAudio(
@@ -232,10 +269,27 @@ export async function synthesizeSpeech(
   });
 }
 
+export async function processSpeechText(
+  request: TextProcessingRequest,
+  options?: {
+    signal?: AbortSignal;
+  }
+): Promise<TextProcessingResult> {
+  return fetchJsonWithInit<TextProcessingResult>(`${API_ROOT}/speech/npl`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(request),
+    signal: options?.signal,
+  });
+}
+
 export async function streamChat(
   agentId: string,
   request: ChatRequest,
-  callbacks: StreamChatCallbacks
+  callbacks: StreamChatCallbacks,
+  workspaceId?: string
 ): Promise<void> {
   const prompt = request.prompt.trim();
   const threadId = request.sessionId ?? createId("thread");
@@ -264,7 +318,7 @@ export async function streamChat(
     initialMessages: buildRunAgentMessages(callbacks.thread, prompt),
     initialState: {},
     threadId,
-    url: `${API_ROOT}/agents/${agentId}/chat`,
+    url: buildApiUrl(`/agents/${agentId}/chat`, { workspaceId }),
   });
   const abortListener = () => agent.abortRun();
   callbacks.signal?.addEventListener("abort", abortListener);
@@ -363,7 +417,7 @@ export async function streamChat(
   );
   const persistedThread =
     !callbacks.thread && !request.title
-      ? await fetchCompletedThread(agentId, threadId)
+      ? await fetchCompletedThread(agentId, threadId, workspaceId)
       : undefined;
   callbacks.onEvent({
     type: "complete",
@@ -638,13 +692,37 @@ function summarizeAssistantText(assistantText: string): string {
 
 async function fetchCompletedThread(
   agentId: string,
-  threadId: string
+  threadId: string,
+  workspaceId?: string
 ): Promise<ChatSession | undefined> {
   try {
-    return await getSession(agentId, threadId);
+    return await getSession(agentId, threadId, workspaceId);
   } catch {
     return undefined;
   }
+}
+
+function buildApiUrl(
+  path: string,
+  options: {
+    searchParams?: Array<[string, string | undefined]>;
+    workspaceId?: string;
+  } = {}
+): string {
+  const query = new URLSearchParams();
+
+  for (const [key, value] of options.searchParams ?? []) {
+    if (value !== undefined) {
+      query.set(key, value);
+    }
+  }
+
+  if (options.workspaceId && options.workspaceId !== "default") {
+    query.set("workspace", options.workspaceId);
+  }
+
+  const queryString = query.toString();
+  return `${API_ROOT}${path}${queryString ? `?${queryString}` : ""}`;
 }
 
 function parseGemmaSkillResultMeta(

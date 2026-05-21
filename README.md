@@ -42,6 +42,16 @@ Set the Markdown store root before running the API:
 export MIN_KB_STORE_ROOT=/absolute/path/to/min-kb-store
 ```
 
+Optional secondary workspace for testing:
+
+```bash
+export MIN_KB_TEST_STORE_ROOT=/absolute/path/to/another/min-kb-store
+```
+
+When `MIN_KB_TEST_STORE_ROOT` is set, the API serves both workspaces at the
+same time and the web app shows a workspace selector. `pnpm dev` also auto-loads
+the bundled repo fixture at `test/min-kb-store` when it exists.
+
 Optional LM Studio overrides:
 
 ```bash
@@ -236,6 +246,8 @@ The repository includes a GitHub Actions workflow that publishes `apps/web/dist`
 ## Notes
 
 - Agent prompts are composed from `AGENT.md`, `SOUL.md`, and enabled skill documents in `min-kb-store`.
+- The API can scope agents, sessions, schedules, and planner runs to a selected
+  workspace through `?workspace=<id>`, with `default` as the fallback.
 - Skills remain file-based `SKILL.md` bundles; executable skills can use the legacy top-level `run.*` convention or a single script inside `scripts/` for compatibility with the open Agent Skills layout.
 - The API exposes a built-in `load-skill` runtime tool so Gemma can fetch the full `SKILL.md` body for any enabled skill on demand instead of relying only on the compact prompt summary.
 - Structured JSON skill-call bodies are forwarded to executable skills through stdin/env and translated into CLI flags like `--field value` for better compatibility with legacy scripts; single-field JSON inputs can also fall back to a positional argument when a skill rejects unknown flags.

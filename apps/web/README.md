@@ -22,7 +22,7 @@ React + Vite PWA frontend for browsing agents, managing chat history, and stream
 
 1. React Query loads health, model, agent, session, and scheduled-task data from the API.
 2. `streamChat` posts a `ChatRequest` and parses streamed `ChatStreamEvent` lines.
-3. Voice turns record in the browser, upload audio through `/api/speech/transcriptions`, and can auto-send the transcript when hands-free mode is on and the composer is empty.
+3. Voice turns record in the browser, upload audio through `/api/speech/transcriptions`, refine the transcript through `/api/speech/npl`, and can auto-send the cleaned prompt when hands-free mode is on and the composer is empty.
 4. Completed assistant replies can be synthesized through `/api/speech/speech` for manual playback or visible-tab auto-play.
 5. Incoming events update the live thread, details console, and cached session data.
 6. Scheduled-task completion polling slows down in the background so the PWA does not burn battery on mobile.
@@ -31,7 +31,7 @@ React + Vite PWA frontend for browsing agents, managing chat history, and stream
 ## Voice UX
 
 - The current voice experience is intentionally **request/response**, not live realtime chat.
-- A spoken turn is: **tap to speak → pause to auto-stop → transcribe → auto-send or review → hear the final reply**.
+- A spoken turn is: **tap to speak → pause to auto-stop → transcribe → clean/rewrite the prompt → auto-send or review → hear the final reply**.
 - **Hands-free** controls whether an empty composer auto-sends the transcript; if the composer already has text, the transcript is appended for review.
 - **Auto-play** only applies to completed assistant replies while the app is visible. Manual **Play reply** stays available on assistant messages.
 

@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { resolveWorkspace } from "@gemma-agent-pwa/min-kb-bridge";
+import { resolveWorkspaces } from "@gemma-agent-pwa/min-kb-bridge";
 import { serve } from "@hono/node-server";
 import { createApiApp } from "./app.js";
 
@@ -8,8 +8,18 @@ const port = Number(process.env.GEMMA_AGENT_PWA_PORT ?? 8787);
 export { createApiApp } from "./app.js";
 
 export async function startApiServer() {
-  const workspace = await resolveWorkspace();
-  const app = createApiApp(workspace);
+  const configuredTestStoreRoot = process.env.MIN_KB_TEST_STORE_ROOT?.trim();
+  const workspaces = await resolveWorkspaces({
+    default: {},
+    ...(configuredTestStoreRoot
+      ? {
+          test: {
+            storeRoot: configuredTestStoreRoot,
+          },
+        }
+      : {}),
+  });
+  const app = createApiApp(workspaces);
   return serve(
     {
       fetch: app.fetch,

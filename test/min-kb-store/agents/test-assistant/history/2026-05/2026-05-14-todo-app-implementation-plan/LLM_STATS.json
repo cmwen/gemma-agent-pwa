@@ -1,0 +1,8 @@
+{
+  "requestCount": 1,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "totalDurationMs": 18982,
+  "lastRecordedAt": "2026-05-14T11:05:57.047Z",
+  "lastModel": "google/gemma-4-e2b"
+}

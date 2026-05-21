@@ -17,6 +17,8 @@ export interface MinKbWorkspace {
   copilotSkillsRoot: string;
 }
 
+export type WorkspaceRegistry = Map<string, MinKbWorkspace>;
+
 export async function resolveWorkspace(
   options: ResolveWorkspaceOptions = {}
 ): Promise<MinKbWorkspace> {
@@ -36,6 +38,7 @@ export async function resolveWorkspace(
 }
 
 export async function summarizeWorkspace(
+  workspaceId: string,
   workspace: MinKbWorkspace
 ): Promise<WorkspaceSummary> {
   const { pathExists } = await import("./utils.js");
@@ -45,12 +48,38 @@ export async function summarizeWorkspace(
     : [];
 
   return {
+    id: workspaceId,
     storeRoot: workspace.storeRoot,
     copilotConfigDir: workspace.copilotConfigDir,
     storeSkillDirectory: workspace.skillsRoot,
     copilotSkillDirectory: workspace.copilotSkillsRoot,
     agentCount: agentNames.filter((name) => name !== "default").length,
   };
+}
+
+export async function resolveWorkspaces(
+  configs: Record<string, ResolveWorkspaceOptions | undefined>
+): Promise<WorkspaceRegistry> {
+  const workspaces: WorkspaceRegistry = new Map();
+
+  for (const [workspaceId, options] of Object.entries(configs)) {
+    try {
+      workspaces.set(workspaceId, await resolveWorkspace(options ?? {}));
+    } catch (error) {
+      if (workspaceId === "default") {
+        throw error;
+      }
+      console.warn(
+        `[workspace] Skipping "${workspaceId}": ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  if (!workspaces.has("default")) {
+    throw new Error('Workspace registry must include a "default" workspace.');
+  }
+
+  return workspaces;
 }
 
 async function resolveStoreRoot(explicitRoot?: string): Promise<string> {

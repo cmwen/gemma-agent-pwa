@@ -1,4 +1,7 @@
-import type { MinKbWorkspace } from "@gemma-agent-pwa/min-kb-bridge";
+import type {
+  MinKbWorkspace,
+  WorkspaceRegistry,
+} from "@gemma-agent-pwa/min-kb-bridge";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -70,6 +73,7 @@ const workspace: MinKbWorkspace = {
   copilotConfigDir: "/tmp/.copilot",
   copilotSkillsRoot: "/tmp/.copilot/skills",
 };
+const workspaces: WorkspaceRegistry = new Map([["default", workspace]]);
 
 beforeEach(() => {
   mocks.startScheduledTaskRunner.mockReturnValue({
@@ -173,6 +177,148 @@ describe("app helpers", () => {
 });
 
 describe("createApiApp chat route", () => {
+  it("proxies speech NPL processing through the local API", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sourceText: "um can you email the summary",
+          detectedLanguage: "en",
+          intent: "Ask to email the summary",
+          cleanedText: "can you email the summary",
+          rewrittenText: "Can you email the summary?",
+          translatedText: "Can you email the summary?",
+          targetLanguage: "en",
+          fillerWords: ["um"],
+          model: "gemma-4-e4b",
+          provider: "openai-compatible",
+          raw: {
+            detectedLanguage: "en",
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+    const app = createApiApp(workspaces);
+
+    const response = await app.request("/api/speech/npl", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        input: "um can you email the summary",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      intent: "Ask to email the summary",
+      rewrittenText: "Can you email the summary?",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8790/v1/npl",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          input: "um can you email the summary",
+        }),
+      })
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("keeps the legacy speech text-processing route working", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sourceText: "um can you email the summary",
+          detectedLanguage: "en",
+          intent: "Ask to email the summary",
+          cleanedText: "can you email the summary",
+          rewrittenText: "Can you email the summary?",
+          translatedText: "Can you email the summary?",
+          targetLanguage: "en",
+          fillerWords: ["um"],
+          model: "gemma-4-e4b",
+          provider: "openai-compatible",
+          raw: {
+            detectedLanguage: "en",
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+    const app = createApiApp(workspaces);
+
+    const response = await app.request("/api/speech/text/process", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        input: "um can you email the summary",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      intent: "Ask to email the summary",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8790/v1/npl",
+      expect.objectContaining({
+        method: "POST",
+      })
+    );
+    fetchMock.mockRestore();
+  });
+
+  it("lists agents for the resolved workspace", async () => {
+    mocks.listAgents.mockResolvedValue([
+      {
+        id: "release-planner",
+        kind: "planner",
+        title: "Release Planner",
+        description: "Plans releases.",
+        combinedPrompt: "You are a release planner.",
+        agentPath: "/tmp/min-kb-store/agents/release-planner/AGENT.md",
+        defaultSoulPath: "/tmp/min-kb-store/agents/default/SOUL.md",
+        historyRoot: "/tmp/min-kb-store/agents/release-planner/history",
+        workingMemoryRoot:
+          "/tmp/min-kb-store/agents/release-planner/memory/working",
+        skillRoot: "/tmp/min-kb-store/agents/release-planner/skills",
+        skillNames: [],
+        delegatedAgentIds: [],
+        sessionCount: 0,
+      },
+    ]);
+    const app = createApiApp(workspaces);
+
+    const response = await app.request("/api/agents");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject([
+      {
+        id: "release-planner",
+        title: "Release Planner",
+      },
+    ]);
+    expect(mocks.listAgents).toHaveBeenCalledWith(workspace);
+  });
+
   it("streams the LM Studio golden path and persists merged runtime config", async () => {
     const userTurn = {
       messageId: "turn-user-1",
@@ -248,7 +394,7 @@ describe("createApiApp chat route", () => {
       };
     });
 
-    const app = createApiApp(workspace);
+    const app = createApiApp(workspaces);
     const response = await app.request("/api/agents/release-planner/chat", {
       method: "POST",
       headers: {
@@ -298,14 +444,7 @@ describe("createApiApp chat route", () => {
           disabledSkills: ["skip-me"],
         }),
         sessionId: "session-1",
-        tools: [
-          expect.objectContaining({
-            name: "delegate-task",
-            metadata: expect.objectContaining({
-              delegatedAgentIds: ["qa-tasker"],
-            }),
-          }),
-        ],
+        tools: [],
       })
     );
     expect(mocks.saveChatTurn).toHaveBeenNthCalledWith(
@@ -400,7 +539,7 @@ describe("createApiApp chat route", () => {
       },
     });
 
-    const app = createApiApp(workspace);
+    const app = createApiApp(workspaces);
     const response = await app.request("/api/agents/release-planner/chat", {
       method: "POST",
       headers: {

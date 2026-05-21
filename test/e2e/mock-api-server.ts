@@ -11,6 +11,7 @@ import type {
   ChatSessionSummary,
   HealthStatus,
   ModelDescriptor,
+  WorkspaceListing,
 } from "@gemma-agent-pwa/contracts";
 
 const port = Number(process.env.PORT ?? 8787);
@@ -55,6 +56,7 @@ const agent: AgentSummary = {
 const health: HealthStatus = {
   ok: true,
   workspace: {
+    id: "default",
     storeRoot: "/tmp/min-kb-store",
     copilotConfigDir: "/tmp/.config/github-copilot",
     storeSkillDirectory: "/tmp/min-kb-store/skills",
@@ -66,6 +68,10 @@ const health: HealthStatus = {
   warmedModel: models[0]?.id,
   modelCount: models.length,
   message: "LM Studio is reachable and ready for local chat.",
+};
+const workspaces: WorkspaceListing = {
+  defaultId: "default",
+  workspaces: [health.workspace],
 };
 
 let completedSession: ChatSession | undefined;
@@ -87,6 +93,10 @@ const server = createServer(async (request, response) => {
 
   if (method === "GET" && url.pathname === "/api/health") {
     return writeJson(response, 200, health);
+  }
+
+  if (method === "GET" && url.pathname === "/api/workspaces") {
+    return writeJson(response, 200, workspaces);
   }
 
   if (method === "GET" && url.pathname === "/api/models") {

@@ -1,4 +1,7 @@
 import net from "node:net";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendCsv,
@@ -6,10 +9,12 @@ import {
   buildApiProxyTarget,
   DEFAULT_DEV_API_BASE_URL,
   findAvailablePort,
+  resolveTestStoreRoot,
   resolvePort,
 } from "../scripts/dev.js";
 
 const servers: net.Server[] = [];
+const tempRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
@@ -27,6 +32,10 @@ afterEach(async () => {
     )
   );
   servers.length = 0;
+  await Promise.all(
+    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
+  );
+  delete process.env.MIN_KB_TEST_STORE_ROOT;
 });
 
 describe("dev launcher helpers", () => {
@@ -67,6 +76,22 @@ describe("dev launcher helpers", () => {
 
   it("keeps an explicit port override", async () => {
     await expect(resolvePort("55106", 55006)).resolves.toBe(55106);
+  });
+
+  it("discovers the repo-local test store fixture when present", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "gemma-agent-pwa-dev-"));
+    tempRoots.push(root);
+    await mkdir(path.join(root, "test/min-kb-store/agents"), {
+      recursive: true,
+    });
+
+    expect(resolveTestStoreRoot(root)).toBe(path.join(root, "test/min-kb-store"));
+  });
+
+  it("prefers an explicit test store override", () => {
+    process.env.MIN_KB_TEST_STORE_ROOT = "/tmp/custom-test-store";
+
+    expect(resolveTestStoreRoot(process.cwd())).toBe("/tmp/custom-test-store");
   });
 });
 

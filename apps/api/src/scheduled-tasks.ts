@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   type ChatRuntimeConfig,
-  createDelegationTool,
   DEFAULT_MODEL,
   getPresetById,
   type ModelDescriptor,
@@ -24,11 +23,11 @@ import {
   recordSessionLlmUsage,
   saveChatTurn,
   upsertScheduledTask,
+  type WorkspaceRegistry,
 } from "@gemma-agent-pwa/min-kb-bridge";
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { loadAgentSkills } from "./agent-skills.js";
 import { runChatLoop } from "./chat-loop.js";
-import { executeDelegatedAgentTool } from "./delegation.js";
 import { listAvailableModels } from "./llm-provider.js";
 import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
@@ -39,22 +38,26 @@ const NEXT_RUN_SEARCH_MINUTES = 8 * 24 * 60;
 
 export function registerScheduledTaskRoutes(
   app: Hono,
-  workspace: MinKbWorkspace,
+  workspaces: WorkspaceRegistry,
   options: {
-    onScheduleMutation?: () => void;
+    onScheduleMutation?: (workspaceId: string) => void;
   } = {}
 ): void {
   app.get("/api/schedules", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     return context.json(await listScheduledTasks(workspace));
   });
 
   app.get("/api/agents/:agentId/schedules", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const agentId = context.req.param("agentId");
     await requireAgent(workspace, agentId);
     return context.json(await listScheduledTasks(workspace, agentId));
   });
 
   app.post("/api/agents/:agentId/schedules", async (context) => {
+    const workspaceId = resolveRequestWorkspaceId(context, workspaces);
+    const workspace = requireWorkspace(workspaces, workspaceId);
     const agentId = context.req.param("agentId");
     await requireAgent(workspace, agentId);
     const input = scheduledTaskCreateSchema.parse(
@@ -65,11 +68,13 @@ export function registerScheduledTaskRoutes(
       agentId,
     });
     await upsertScheduledTask(workspace, task);
-    options.onScheduleMutation?.();
+    options.onScheduleMutation?.(workspaceId);
     return context.json(task, 201);
   });
 
   app.patch("/api/agents/:agentId/schedules/:taskId", async (context) => {
+    const workspaceId = resolveRequestWorkspaceId(context, workspaces);
+    const workspace = requireWorkspace(workspaces, workspaceId);
     const agentId = context.req.param("agentId");
     await requireAgent(workspace, agentId);
     const existing = await requireScheduledTask(
@@ -82,11 +87,13 @@ export function registerScheduledTaskRoutes(
     );
     const task = applyScheduledTaskUpdate(existing, input);
     await upsertScheduledTask(workspace, task);
-    options.onScheduleMutation?.();
+    options.onScheduleMutation?.(workspaceId);
     return context.json(task);
   });
 
   app.delete("/api/agents/:agentId/schedules/:taskId", async (context) => {
+    const workspaceId = resolveRequestWorkspaceId(context, workspaces);
+    const workspace = requireWorkspace(workspaces, workspaceId);
     const agentId = context.req.param("agentId");
     await requireAgent(workspace, agentId);
     await deleteScheduledTaskRecord(
@@ -94,11 +101,13 @@ export function registerScheduledTaskRoutes(
       agentId,
       context.req.param("taskId")
     );
-    options.onScheduleMutation?.();
+    options.onScheduleMutation?.(workspaceId);
     return context.body(null, 204);
   });
 
   app.post("/api/agents/:agentId/schedules/:taskId/run", async (context) => {
+    const workspaceId = resolveRequestWorkspaceId(context, workspaces);
+    const workspace = requireWorkspace(workspaces, workspaceId);
     const agentId = context.req.param("agentId");
     await requireAgent(workspace, agentId);
     const task = await requireScheduledTask(
@@ -112,7 +121,7 @@ export function registerScheduledTaskRoutes(
     const updatedTask = await runScheduledTask(workspace, task, {
       trigger: "manual",
     });
-    options.onScheduleMutation?.();
+    options.onScheduleMutation?.(workspaceId);
     return context.json(updatedTask);
   });
 }
@@ -424,13 +433,8 @@ async function executeScheduledChat(
     task.agentId,
     runtimeConfig.disabledSkills
   );
-  const delegationTool = createDelegationTool({
-    agentTitle: agent.title,
-    delegatedAgentIds: agent.delegatedAgentIds ?? [],
-  });
   const tools = buildRuntimeTools({
     enabledSkills,
-    delegationTool,
   });
   const loopResult = await runChatLoop({
     agentId: task.agentId,
@@ -444,18 +448,6 @@ async function executeScheduledChat(
     executeToolCall: (call) =>
       executeRuntimeToolCall(call, {
         enabledSkills,
-        executeDelegation: (callInput) =>
-          executeDelegatedAgentTool(
-            workspace,
-            {
-              allowedAgentIds: agent.delegatedAgentIds ?? [],
-              parentAgentId: task.agentId,
-              parentSessionId: userThread.sessionId,
-              parentAgentTitle: agent.title,
-              parentConfig: runtimeConfig,
-            },
-            callInput
-          ),
       }),
   });
   await saveChatTurn(workspace, {
@@ -636,3 +628,34 @@ export const __testing = {
   matchesSchedule,
   parseWeekday,
 };
+
+function resolveRequestWorkspace(
+  context: Context,
+  workspaces: WorkspaceRegistry
+): MinKbWorkspace {
+  return requireWorkspace(
+    workspaces,
+    resolveRequestWorkspaceId(context, workspaces)
+  );
+}
+
+function resolveRequestWorkspaceId(
+  context: Context,
+  workspaces: WorkspaceRegistry
+): string {
+  const requestedWorkspaceId = context.req.query("workspace");
+  return requestedWorkspaceId && workspaces.has(requestedWorkspaceId)
+    ? requestedWorkspaceId
+    : "default";
+}
+
+function requireWorkspace(
+  workspaces: WorkspaceRegistry,
+  workspaceId: string
+): MinKbWorkspace {
+  const workspace = workspaces.get(workspaceId);
+  if (!workspace) {
+    throw new Error(`Workspace is not configured: ${workspaceId}`);
+  }
+  return workspace;
+}

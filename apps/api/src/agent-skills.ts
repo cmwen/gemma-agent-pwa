@@ -367,6 +367,12 @@ function parseLegacyValue(value: string): unknown {
     return unwrappedString;
   }
 
+  const unwrappedStandardQuotedString =
+    unwrapStandardQuotedStringLiteral(trimmed);
+  if (unwrappedStandardQuotedString !== undefined) {
+    return unwrappedStandardQuotedString;
+  }
+
   const parsedJson = tryParseJson(trimmed);
   if (parsedJson !== undefined) {
     return parsedJson;
@@ -435,11 +441,10 @@ function normalizeLegacyKey(key: string): string {
   if (unwrappedString !== undefined) {
     return unwrappedString;
   }
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
+  const unwrappedStandardQuotedString =
+    unwrapStandardQuotedStringLiteral(trimmed);
+  if (unwrappedStandardQuotedString !== undefined) {
+    return unwrappedStandardQuotedString;
   }
   return trimmed;
 }
@@ -456,6 +461,22 @@ function unwrapLegacyQuotedString(value: string): string | undefined {
     );
   }
   return undefined;
+}
+
+function unwrapStandardQuotedStringLiteral(value: string): string | undefined {
+  const quote = value[0];
+  if (
+    (quote !== '"' && quote !== "'") ||
+    value.length < 2 ||
+    value[value.length - 1] !== quote
+  ) {
+    return undefined;
+  }
+
+  return value
+    .slice(1, -1)
+    .replaceAll(`\\${quote}`, quote)
+    .replaceAll("\\\\", "\\");
 }
 
 function parseLoadSkillToolInput(input: string): string | undefined {
@@ -646,10 +667,35 @@ export async function executeSkillScript(
     skillName: skill.name,
     timeoutMs,
   });
+  if (
+    firstResult.exitCode !== 0 ||
+    firstResult.errorMessage ||
+    firstResult.timedOut
+  ) {
+    logSkillProcessDebug({
+      skillName: skill.name,
+      phase: "failed",
+      command,
+      args: [...args, ...structuredInput.args],
+      cwd: scriptDir,
+      rawInput: input,
+      envKeys: Object.keys(structuredInput.env),
+      result: firstResult,
+    });
+  }
 
   if (shouldRetryWithSinglePositionalArg(firstResult, structuredInput)) {
     const positionalInput = structuredInput.singleValuePositionalArg;
     if (positionalInput !== undefined) {
+      logSkillProcessDebug({
+        skillName: skill.name,
+        phase: "retrying-positional",
+        command,
+        args: [...args, positionalInput],
+        cwd: scriptDir,
+        rawInput: input,
+        envKeys: Object.keys(structuredInput.env),
+      });
       const retriedResult = await runSkillProcess({
         command,
         args: [...args, positionalInput],
@@ -659,6 +705,22 @@ export async function executeSkillScript(
         skillName: skill.name,
         timeoutMs,
       });
+      if (
+        retriedResult.exitCode !== 0 ||
+        retriedResult.errorMessage ||
+        retriedResult.timedOut
+      ) {
+        logSkillProcessDebug({
+          skillName: skill.name,
+          phase: "retry-failed",
+          command,
+          args: [...args, positionalInput],
+          cwd: scriptDir,
+          rawInput: input,
+          envKeys: Object.keys(structuredInput.env),
+          result: retriedResult,
+        });
+      }
       if (retriedResult.exitCode === 0) {
         return formatSkillProcessResult(skill.name, retriedResult);
       }
@@ -910,6 +972,17 @@ interface SkillProcessResult {
   errorMessage?: string;
 }
 
+interface SkillProcessDebugInput {
+  skillName: string;
+  phase: "failed" | "retrying-positional" | "retry-failed";
+  command: string;
+  args: string[];
+  cwd: string;
+  rawInput: string;
+  envKeys: string[];
+  result?: SkillProcessResult;
+}
+
 async function runSkillProcess(
   options: SkillProcessOptions
 ): Promise<SkillProcessResult> {
@@ -1014,6 +1087,40 @@ async function runSkillProcess(
       });
     });
   });
+}
+
+function logSkillProcessDebug(input: SkillProcessDebugInput): void {
+  if (process.env.NODE_ENV === "test") {
+    return;
+  }
+
+  const lines = [
+    `[skills] ${input.phase} · ${input.skillName}`,
+    `command=${input.command}`,
+    `args=${JSON.stringify(input.args)}`,
+    `cwd=${input.cwd}`,
+    `envKeys=${input.envKeys.length > 0 ? input.envKeys.join(",") : "(none)"}`,
+    `rawInput=${JSON.stringify(input.rawInput)}`,
+  ];
+
+  if (input.result) {
+    lines.push(
+      `exitCode=${input.result.exitCode}`,
+      `timedOut=${input.result.timedOut ? "yes" : "no"}`
+    );
+    if (input.result.errorMessage) {
+      lines.push(`error=${input.result.errorMessage}`);
+    }
+    if (input.result.stderr.trim()) {
+      lines.push(`stderr=${JSON.stringify(input.result.stderr.trim())}`);
+    }
+  }
+
+  const logger =
+    input.phase === "failed" || input.phase === "retry-failed"
+      ? console.error
+      : console.info;
+  logger(lines.join("\n"));
 }
 
 function isBrokenPipeError(error: unknown): boolean {

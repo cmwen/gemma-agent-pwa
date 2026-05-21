@@ -74,6 +74,19 @@ And also:
     ]);
   });
 
+  it("preserves literal backslash escapes inside legacy quoted strings", () => {
+    const text =
+      '<|tool_call>call:git-checkpoint-push{repo:"~/sy\\nc/logseq,~/dev/mi\\n-kb-store"}<tool_call|>';
+
+    const calls = parseSkillCalls(text);
+    expect(calls).toEqual([
+      {
+        skillName: "git-checkpoint-push",
+        input: '{"repo":"~/sy\\\\nc/logseq,~/dev/mi\\\\n-kb-store"}',
+      },
+    ]);
+  });
+
   it("extracts legacy tool calls when the model splits call and skill name across lines", () => {
     const text = `<|tool_call>call
 search-store{query: "TODO"}<tool_call|>`;
@@ -363,6 +376,14 @@ describe("structured skill input helpers", () => {
     expect(extractSingleValuePositionalArg({ query: ["TODO"] })).toBe(
       undefined
     );
+  });
+
+  it("keeps standard quoted legacy strings literal instead of JSON-decoding escapes", () => {
+    expect(
+      normalizeLegacyToolCallInput(
+        '{repo:"~/sy\\nc/logseq,~/dev/mi\\n-kb-store"}'
+      )
+    ).toBe('{"repo":"~/sy\\\\nc/logseq,~/dev/mi\\\\n-kb-store"}');
   });
 
   it("retries single-field JSON input as a positional argument after argparse-style flag errors", () => {

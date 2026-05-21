@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { getDetectedWebOrigins, splitCsv } from "./network.js";
 
@@ -22,6 +24,7 @@ async function main(): Promise<void> {
   const apiProxyTarget =
     process.env.GEMMA_AGENT_PWA_API_PROXY_TARGET ??
     buildApiProxyTarget(apiPort);
+  const testStoreRoot = resolveTestStoreRoot(process.cwd());
   const webOrigins = getDetectedWebOrigins(webPort);
 
   console.info(
@@ -42,6 +45,7 @@ async function main(): Promise<void> {
         process.env.GEMMA_AGENT_PWA_CORS_ORIGINS,
         webOrigins
       ),
+      ...(testStoreRoot ? { MIN_KB_TEST_STORE_ROOT: testStoreRoot } : {}),
     },
     "api"
   );
@@ -98,6 +102,16 @@ export function appendCsv(
   return [...splitCsv(existingValue), ...additions]
     .filter((value, index, values) => values.indexOf(value) === index)
     .join(",");
+}
+
+export function resolveTestStoreRoot(cwd: string): string | undefined {
+  const configuredStoreRoot = process.env.MIN_KB_TEST_STORE_ROOT?.trim();
+  if (configuredStoreRoot) {
+    return configuredStoreRoot;
+  }
+
+  const candidateRoot = path.resolve(cwd, "test/min-kb-store");
+  return existsSync(path.join(candidateRoot, "agents")) ? candidateRoot : undefined;
 }
 
 function parsePort(value: string | undefined): number | undefined {

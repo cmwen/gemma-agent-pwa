@@ -575,6 +575,9 @@ export const speechHealthSchema = z.object({
   sttModel: z.string().min(1),
   ttsModel: z.string().min(1),
   defaultVoice: z.string().min(1),
+  nlpModel: z.string().min(1).optional(),
+  nlpUpstreamOk: z.boolean().optional(),
+  nlpUpstreamBaseUrl: z.string().url().optional(),
   detail: z.string().optional(),
 });
 export type SpeechHealth = z.infer<typeof speechHealthSchema>;
@@ -597,6 +600,14 @@ export const speechCapabilitiesSchema = z.object({
     supported: z.boolean(),
     upstreamEndpoint: z.string().optional(),
   }),
+  textProcessing: z
+    .object({
+      endpoint: z.enum(["/v1/npl", "/v1/text/process"]),
+      model: z.string().min(1),
+      targetLanguage: z.string().min(1),
+      features: z.array(z.string().min(1)),
+    })
+    .optional(),
 });
 export type SpeechCapabilities = z.infer<typeof speechCapabilitiesSchema>;
 
@@ -628,7 +639,30 @@ export const transcriptionResultSchema = z.object({
 });
 export type TranscriptionResult = z.infer<typeof transcriptionResultSchema>;
 
+export const textProcessingRequestSchema = z.object({
+  input: z.string().trim().min(1),
+  language: z.string().trim().min(2).max(16).optional(),
+  targetLanguage: z.string().trim().min(2).max(16).optional(),
+});
+export type TextProcessingRequest = z.infer<typeof textProcessingRequestSchema>;
+
+export const textProcessingResultSchema = z.object({
+  sourceText: z.string(),
+  detectedLanguage: z.string().min(1),
+  intent: z.string().min(1),
+  cleanedText: z.string().min(1),
+  rewrittenText: z.string().min(1),
+  translatedText: z.string().min(1),
+  targetLanguage: z.string().min(1),
+  fillerWords: z.array(z.string()),
+  model: z.string().min(1),
+  provider: z.literal("openai-compatible"),
+  raw: z.unknown(),
+});
+export type TextProcessingResult = z.infer<typeof textProcessingResultSchema>;
+
 export const workspaceSummarySchema = z.object({
+  id: z.string().min(1),
   storeRoot: z.string().min(1),
   copilotConfigDir: z.string().min(1),
   storeSkillDirectory: z.string().min(1),
@@ -636,6 +670,12 @@ export const workspaceSummarySchema = z.object({
   agentCount: z.number().int().nonnegative(),
 });
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
+
+export const workspaceListingSchema = z.object({
+  workspaces: z.array(workspaceSummarySchema),
+  defaultId: z.string().min(1),
+});
+export type WorkspaceListing = z.infer<typeof workspaceListingSchema>;
 
 export const healthStatusSchema = z.object({
   ok: z.boolean(),

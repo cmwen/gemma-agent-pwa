@@ -48,8 +48,10 @@ interface SkillInventoryDebugInput {
   agentKind?: string;
   delegatedAgentIds?: string[];
   executableSkillCount: number;
+  requestedToolNames?: string[];
   skillNames: string[];
   toolNames: string[];
+  droppedToolNames?: string[];
 }
 
 const MAX_RESPONSE_PREVIEW_LENGTH = 1_200;
@@ -203,7 +205,9 @@ export function buildSkillInventoryDebugLog(
       ["Loaded", String(input.skillNames.length)],
       ["Executable", String(input.executableSkillCount)],
       ["Skills", input.skillNames.join(", ")],
+      ["Requested tools", input.requestedToolNames?.join(", ")],
       ["Tools", input.toolNames.join(", ")],
+      ["Dropped tools", input.droppedToolNames?.join(", ")],
       ["Delegation targets", input.delegatedAgentIds?.join(", ")],
     ]),
   };

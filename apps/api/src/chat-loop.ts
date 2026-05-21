@@ -27,7 +27,6 @@ import {
 import { streamProviderChat } from "./llm-provider.js";
 
 const DEFAULT_MAX_SKILL_LOOP_ITERATIONS = 5;
-const MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS = 12;
 const FINALIZE_AFTER_SKILLS_INSTRUCTION =
   "Use the skill result above to continue solving the user's latest request. If you have enough information, answer the user directly in plain language. If you still need another executable skill, emit the next skill_call block(s) only. Do not include reasoning traces, planning notes, or raw tool-call markup in the visible reply.";
 
@@ -73,7 +72,7 @@ export async function runChatLoop(
   const streamChat = options.streamChat ?? streamProviderChat;
   const executeSkill = options.executeSkill ?? executeSkillScript;
   const conversationTurns = [...options.conversationTurns];
-  const maxSkillLoopIterations = getMaxSkillLoopIterations(options.agentKind);
+  const maxSkillLoopIterations = getMaxSkillLoopIterations();
   let finalAssistantText = "";
   let finalThinkingText: string | undefined;
   let latestAssistantFallback: AssistantFallback | undefined;
@@ -266,12 +265,8 @@ export async function runChatLoop(
   };
 }
 
-function getMaxSkillLoopIterations(
-  agentKind: AgentSummary["kind"] | undefined
-): number {
-  return agentKind === "orchestrator"
-    ? MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS
-    : DEFAULT_MAX_SKILL_LOOP_ITERATIONS;
+function getMaxSkillLoopIterations(): number {
+  return DEFAULT_MAX_SKILL_LOOP_ITERATIONS;
 }
 
 function updateLlmStats(
@@ -334,7 +329,6 @@ function buildAssistantFallback(
 export const __testing = {
   DEFAULT_MAX_SKILL_LOOP_ITERATIONS,
   FINALIZE_AFTER_SKILLS_INSTRUCTION,
-  MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS,
   buildAssistantFallback,
   buildSkillCallId,
   getMaxSkillLoopIterations,

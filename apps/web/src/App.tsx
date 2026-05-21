@@ -3,7 +3,6 @@ import {
   type ChatSessionSummary,
   type ChatStreamEvent,
   type ChatTurn,
-  createDelegationTool,
   GEMMA_BALANCED_PRESET_ID,
   GEMMA_PRESETS,
   getPresetById,
@@ -13,6 +12,7 @@ import {
   type ScheduledTaskCreate,
   type ScheduledTaskUpdate,
   type SpeechCapabilities,
+  type TextProcessingResult,
 } from "@gemma-agent-pwa/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -71,6 +71,8 @@ import {
   getSession,
   getSessions,
   getSpeechCapabilities,
+  getWorkspaces,
+  processSpeechText,
   restoreSession as restoreSessionRequest,
   runScheduledTask as runScheduledTaskRequest,
   streamChat,
@@ -177,6 +179,7 @@ const WEEKDAY_OPTIONS = [
 
 export default function App() {
   const queryClient = useQueryClient();
+  const selectedWorkspaceId = useAppStore((state) => state.selectedWorkspaceId);
   const selectedAgentId = useAppStore((state) => state.selectedAgentId);
   const selectedSessionIds = useAppStore((state) => state.selectedSessionIds);
   const lastScheduledRunNotifications = useAppStore(
@@ -205,6 +208,9 @@ export default function App() {
   const setAutoPlayReplies = useAppStore((state) => state.setAutoPlayReplies);
   const setHandsFreeVoiceTurns = useAppStore(
     (state) => state.setHandsFreeVoiceTurns
+  );
+  const setSelectedWorkspaceId = useAppStore(
+    (state) => state.setSelectedWorkspaceId
   );
 
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
@@ -251,6 +257,8 @@ export default function App() {
   const [historyError, setHistoryError] = useState<string>();
   const [recordingState, setRecordingState] = useState<RecordingState>("idle");
   const [speechError, setSpeechError] = useState<string>();
+  const [voiceProcessingResult, setVoiceProcessingResult] =
+    useState<TextProcessingResult>();
   const [playingMessageId, setPlayingMessageId] = useState<string>();
   const [speechLoadingMessageId, setSpeechLoadingMessageId] =
     useState<string>();
@@ -300,9 +308,15 @@ export default function App() {
     | undefined
   >(undefined);
 
+  const workspacesQuery = useQuery({
+    queryKey: ["workspaces"],
+    queryFn: getWorkspaces,
+    retry: 1,
+    staleTime: HEALTH_QUERY_STALE_TIME_MS,
+  });
   const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: getHealth,
+    queryKey: ["health", selectedWorkspaceId],
+    queryFn: () => getHealth(selectedWorkspaceId),
     retry: 1,
     staleTime: HEALTH_QUERY_STALE_TIME_MS,
     refetchInterval: getHealthPollingInterval({
@@ -336,8 +350,8 @@ export default function App() {
     refetchOnReconnect: true,
   });
   const agentsQuery = useQuery({
-    queryKey: ["agents"],
-    queryFn: getAgents,
+    queryKey: ["agents", selectedWorkspaceId],
+    queryFn: () => getAgents(selectedWorkspaceId),
   });
   const schedulePanelVisible =
     scheduleEditorOpen || modelDetailsOpen || mobileSection === "details";
@@ -347,7 +361,7 @@ export default function App() {
     isSchedulePanelVisible: schedulePanelVisible,
   });
   const cachedNotificationSchedules = queryClient.getQueryData<ScheduledTask[]>(
-    ["scheduled-tasks", "notifications"]
+    ["scheduled-tasks", "notifications", selectedWorkspaceId]
   );
   const notificationPollingInterval = getScheduleNotificationPollingInterval({
     documentHidden: isDocumentHidden,
@@ -356,8 +370,14 @@ export default function App() {
     tasks: cachedNotificationSchedules,
   });
   const selectedAgentSchedulesQuery = useQuery({
-    queryKey: ["scheduled-tasks", "agent", selectedAgentId],
-    queryFn: () => getScheduledTasks(selectedAgentId ?? ""),
+    queryKey: [
+      "scheduled-tasks",
+      "agent",
+      selectedWorkspaceId,
+      selectedAgentId,
+    ],
+    queryFn: () =>
+      getScheduledTasks(selectedAgentId ?? "", selectedWorkspaceId),
     retry: 1,
     refetchInterval: schedulePollingInterval,
     refetchIntervalInBackground: false,
@@ -366,8 +386,8 @@ export default function App() {
     enabled: Boolean(selectedAgentId && schedulePanelVisible),
   });
   const notificationSchedulesQuery = useQuery({
-    queryKey: ["scheduled-tasks", "notifications"],
-    queryFn: () => getScheduledTasks(),
+    queryKey: ["scheduled-tasks", "notifications", selectedWorkspaceId],
+    queryFn: () => getScheduledTasks(undefined, selectedWorkspaceId),
     retry: 1,
     enabled:
       notificationsEnabled &&
@@ -381,14 +401,50 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (!selectedAgentId && agentsQuery.data?.[0]) {
+    const availableWorkspaceIds =
+      workspacesQuery.data?.workspaces.map((workspace) => workspace.id) ?? [];
+    if (availableWorkspaceIds.length === 0) {
+      return;
+    }
+    if (!availableWorkspaceIds.includes(selectedWorkspaceId)) {
+      setSelectedWorkspaceId(
+        workspacesQuery.data?.defaultId ?? availableWorkspaceIds[0] ?? "default"
+      );
+    }
+  }, [selectedWorkspaceId, setSelectedWorkspaceId, workspacesQuery.data]);
+
+  useEffect(() => {
+    if (!selectedWorkspaceId) {
+      return;
+    }
+    setSelectedAgentId(undefined);
+    setLiveThread(undefined);
+    setHistoryError(undefined);
+  }, [selectedWorkspaceId, setSelectedAgentId]);
+
+  useEffect(() => {
+    if (
+      selectedAgentId &&
+      agentsQuery.data?.some((agent) => agent.id === selectedAgentId)
+    ) {
+      return;
+    }
+    if (agentsQuery.data?.[0]) {
       setSelectedAgentId(agentsQuery.data[0].id);
+      return;
+    }
+    if (selectedAgentId) {
+      setSelectedAgentId(undefined);
     }
   }, [agentsQuery.data, selectedAgentId, setSelectedAgentId]);
 
   const selectedAgent = useMemo(
     () => agentsQuery.data?.find((agent) => agent.id === selectedAgentId),
     [agentsQuery.data, selectedAgentId]
+  );
+  const availableWorkspaces = workspacesQuery.data?.workspaces ?? [];
+  const selectedWorkspace = availableWorkspaces.find(
+    (workspace) => workspace.id === selectedWorkspaceId
   );
   const selectedAgentSchedules = selectedAgentSchedulesQuery.data ?? [];
   const pendingScheduleNotifications = useMemo(
@@ -401,16 +457,17 @@ export default function App() {
   );
 
   const agentDetailQuery = useQuery({
-    queryKey: ["agent", selectedAgentId],
-    queryFn: () => getAgent(selectedAgentId ?? ""),
+    queryKey: ["agent", selectedWorkspaceId, selectedAgentId],
+    queryFn: () => getAgent(selectedAgentId ?? "", selectedWorkspaceId),
     enabled: Boolean(selectedAgentId),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
 
   const sessionsQuery = useQuery({
-    queryKey: ["sessions", selectedAgentId, historyView],
-    queryFn: () => getSessions(selectedAgentId ?? "", historyView),
+    queryKey: ["sessions", selectedWorkspaceId, selectedAgentId, historyView],
+    queryFn: () =>
+      getSessions(selectedAgentId ?? "", historyView, selectedWorkspaceId),
     enabled: Boolean(selectedAgentId),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -432,7 +489,11 @@ export default function App() {
     }
     if (
       historyView === "active" &&
-      !hasStoredSessionSelection(selectedSessionIds, selectedAgentId) &&
+      !hasStoredSessionSelection(
+        selectedSessionIds,
+        selectedWorkspaceId,
+        selectedAgentId
+      ) &&
       sessionsQuery.data?.[0]
     ) {
       setSelectedSessionId(selectedAgentId, sessionsQuery.data[0].sessionId);
@@ -440,6 +501,7 @@ export default function App() {
   }, [
     selectedAgentId,
     historyView,
+    selectedWorkspaceId,
     selectedSessionIds,
     sessionsQuery.data,
     setSelectedSessionId,
@@ -447,12 +509,23 @@ export default function App() {
 
   const activeSessionId = getSelectedSessionId(
     selectedSessionIds,
+    selectedWorkspaceId,
     selectedAgentId
   );
 
   const sessionQuery = useQuery({
-    queryKey: ["session", selectedAgentId, activeSessionId],
-    queryFn: () => getSession(selectedAgentId ?? "", activeSessionId ?? ""),
+    queryKey: [
+      "session",
+      selectedWorkspaceId,
+      selectedAgentId,
+      activeSessionId,
+    ],
+    queryFn: () =>
+      getSession(
+        selectedAgentId ?? "",
+        activeSessionId ?? "",
+        selectedWorkspaceId
+      ),
     enabled: Boolean(selectedAgentId && activeSessionId),
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
@@ -486,7 +559,7 @@ export default function App() {
 
   const thread =
     liveThread?.sessionId === activeSessionId ? liveThread : sessionQuery.data;
-  const runtimeConfigSourceKey = `${selectedAgentId ?? "none"}:${thread?.sessionId ?? "new"}`;
+  const runtimeConfigSourceKey = `${selectedWorkspaceId}:${selectedAgentId ?? "none"}:${thread?.sessionId ?? "new"}`;
 
   useEffect(() => {
     const agentConfig = agentDetailQuery.data?.runtimeConfig;
@@ -543,7 +616,11 @@ export default function App() {
     thread?.runtimeConfig,
   ]);
 
-  const draftKey = buildDraftKey(selectedAgentId, activeSessionId);
+  const draftKey = buildDraftKey(
+    selectedWorkspaceId,
+    selectedAgentId,
+    activeSessionId
+  );
   const draft = useAppStore(
     useCallback((state) => state.drafts[draftKey] ?? "", [draftKey])
   );
@@ -584,6 +661,7 @@ export default function App() {
     typeof MediaRecorder !== "undefined" &&
     typeof navigator.mediaDevices?.getUserMedia === "function";
   const speechReady = Boolean(healthQuery.data?.speechReachable);
+  const speechTextProcessing = speechCapabilitiesQuery.data?.textProcessing;
   const speechUnavailableMessage = getSpeechUnavailableMessage(
     healthQuery.data
   );
@@ -874,16 +952,41 @@ export default function App() {
           throw new Error("I didn't catch that. Try again.");
         }
         setMobileSection("chat");
-        if (
-          shouldAutoSendTranscript({
-            currentDraft: draft,
-            handsFreeVoiceTurns,
-          })
-        ) {
-          await handleSendRef.current(transcript);
+        let nextPrompt = transcript;
+        let shouldSendAutomatically = shouldAutoSendTranscript({
+          currentDraft: draft,
+          handsFreeVoiceTurns,
+        });
+
+        try {
+          const processed = await processSpeechText(
+            {
+              input: transcript,
+            },
+            {
+              signal: controller.signal,
+            }
+          );
+          setVoiceProcessingResult(processed);
+          nextPrompt = processed.rewrittenText.trim() || transcript;
+        } catch (error) {
+          if (isAbortError(error)) {
+            throw error;
+          }
+          setVoiceProcessingResult(undefined);
+          shouldSendAutomatically = false;
+          setSpeechError(
+            error instanceof Error
+              ? `${error.message} The raw transcript was kept in the composer for review.`
+              : "Speech text processing failed. The raw transcript was kept in the composer for review."
+          );
+        }
+
+        if (shouldSendAutomatically) {
+          await handleSendRef.current(nextPrompt);
           return;
         }
-        const nextDraft = buildNextDraftFromTranscript(draft, transcript);
+        const nextDraft = buildNextDraftFromTranscript(draft, nextPrompt);
         setDraft(draftKey, nextDraft);
         requestAnimationFrame(() => {
           composerInputRef.current?.focus();
@@ -934,6 +1037,7 @@ export default function App() {
 
     stopSpeechPlayback();
     setSpeechError(undefined);
+    setVoiceProcessingResult(undefined);
     cancelPendingTranscriptionRef.current = false;
 
     try {
@@ -1801,16 +1905,18 @@ export default function App() {
         await updateScheduledTaskRequest(
           selectedAgentId,
           editingScheduleId,
-          payload as ScheduledTaskUpdate
+          payload as ScheduledTaskUpdate,
+          selectedWorkspaceId
         );
       } else {
         await createScheduledTaskRequest(
           selectedAgentId,
-          payload as ScheduledTaskCreate
+          payload as ScheduledTaskCreate,
+          selectedWorkspaceId
         );
       }
       await queryClient.invalidateQueries({
-        queryKey: ["scheduled-tasks"],
+        queryKey: ["scheduled-tasks", selectedWorkspaceId],
       });
       closeScheduleEditor();
     } catch (error) {
@@ -1828,9 +1934,13 @@ export default function App() {
     }
     setScheduleError(undefined);
     try {
-      await runScheduledTaskRequest(selectedAgentId, task.id);
+      await runScheduledTaskRequest(
+        selectedAgentId,
+        task.id,
+        selectedWorkspaceId
+      );
       await queryClient.invalidateQueries({
-        queryKey: ["scheduled-tasks"],
+        queryKey: ["scheduled-tasks", selectedWorkspaceId],
       });
     } catch (error) {
       setScheduleError(
@@ -1845,11 +1955,16 @@ export default function App() {
     }
     setScheduleError(undefined);
     try {
-      await updateScheduledTaskRequest(selectedAgentId, task.id, {
-        enabled: !task.enabled,
-      });
+      await updateScheduledTaskRequest(
+        selectedAgentId,
+        task.id,
+        {
+          enabled: !task.enabled,
+        },
+        selectedWorkspaceId
+      );
       await queryClient.invalidateQueries({
-        queryKey: ["scheduled-tasks"],
+        queryKey: ["scheduled-tasks", selectedWorkspaceId],
       });
     } catch (error) {
       setScheduleError(
@@ -1870,9 +1985,13 @@ export default function App() {
     }
     setScheduleError(undefined);
     try {
-      await deleteScheduledTaskRequest(selectedAgentId, task.id);
+      await deleteScheduledTaskRequest(
+        selectedAgentId,
+        task.id,
+        selectedWorkspaceId
+      );
       await queryClient.invalidateQueries({
-        queryKey: ["scheduled-tasks"],
+        queryKey: ["scheduled-tasks", selectedWorkspaceId],
       });
       if (editingScheduleId === task.id) {
         closeScheduleEditor();
@@ -2108,12 +2227,6 @@ export default function App() {
     setDraft(draftKey, "");
 
     try {
-      const delegationTool = agentDetailQuery.data
-        ? createDelegationTool({
-            agentTitle: agentDetailQuery.data.title,
-            delegatedAgentIds: agentDetailQuery.data.delegatedAgentIds ?? [],
-          })
-        : undefined;
       await streamChat(
         selectedAgentId,
         {
@@ -2121,7 +2234,7 @@ export default function App() {
           title: thread?.title,
           prompt,
           config: runtimeConfig,
-          tools: delegationTool ? [delegationTool] : [],
+          tools: [],
         },
         {
           signal: controller.signal,
@@ -2182,11 +2295,12 @@ export default function App() {
                   event.response.thread.sessionId
                 );
                 void queryClient.invalidateQueries({
-                  queryKey: ["sessions", selectedAgentId],
+                  queryKey: ["sessions", selectedWorkspaceId, selectedAgentId],
                 });
                 void queryClient.invalidateQueries({
                   queryKey: [
                     "session",
+                    selectedWorkspaceId,
                     selectedAgentId,
                     event.response.thread.sessionId,
                   ],
@@ -2216,7 +2330,8 @@ export default function App() {
                 break;
             }
           },
-        }
+        },
+        selectedWorkspaceId
       );
     } catch (error) {
       if (isAbortError(error)) {
@@ -2263,6 +2378,7 @@ export default function App() {
     }
     discardRecording();
     stopSpeechPlayback();
+    setVoiceProcessingResult(undefined);
     forceAutoScrollTimelineRef.current = true;
     timelineMetricsRef.current = undefined;
     abortRef.current?.abort();
@@ -2302,7 +2418,11 @@ export default function App() {
     });
     try {
       if (action === "restore") {
-        await restoreSessionRequest(selectedAgentId, session.sessionId);
+        await restoreSessionRequest(
+          selectedAgentId,
+          session.sessionId,
+          selectedWorkspaceId
+        );
         setSelectedSessionId(selectedAgentId, session.sessionId);
         setHistoryView("active");
       } else {
@@ -2314,7 +2434,8 @@ export default function App() {
         await deleteSessionRequest(
           selectedAgentId,
           session.sessionId,
-          action === "soft-delete" ? "soft" : "permanent"
+          action === "soft-delete" ? "soft" : "permanent",
+          selectedWorkspaceId
         );
         if (activeSessionId === session.sessionId) {
           setSelectedSessionId(selectedAgentId, null);
@@ -2327,16 +2448,21 @@ export default function App() {
 
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: ["sessions", selectedAgentId],
+          queryKey: ["sessions", selectedWorkspaceId, selectedAgentId],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["session", selectedAgentId, session.sessionId],
+          queryKey: [
+            "session",
+            selectedWorkspaceId,
+            selectedAgentId,
+            session.sessionId,
+          ],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["agents"],
+          queryKey: ["agents", selectedWorkspaceId],
         }),
         queryClient.invalidateQueries({
-          queryKey: ["agent", selectedAgentId],
+          queryKey: ["agent", selectedWorkspaceId, selectedAgentId],
         }),
       ]);
     } catch (error) {
@@ -2493,9 +2619,33 @@ export default function App() {
       >
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Agents</p>
+            <p className="eyebrow">
+              {selectedWorkspace
+                ? `Workspace · ${formatWorkspaceLabel(selectedWorkspace.id)}`
+                : "Agents"}
+            </p>
             <h1>Gemma Agent</h1>
           </div>
+          {availableWorkspaces.length > 1 ? (
+            <div className="panel-header-actions">
+              <label>
+                <span className="eyebrow">Workspace</span>
+                <select
+                  className="select"
+                  onChange={(event) => {
+                    setSelectedWorkspaceId(event.target.value);
+                  }}
+                  value={selectedWorkspaceId}
+                >
+                  {availableWorkspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>
+                      {formatWorkspaceLabel(workspace.id)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
         </div>
         <div className="agent-list" data-mobile-scroll-region="true">
           {agentsQuery.data?.map((agent) => (
@@ -2815,6 +2965,43 @@ export default function App() {
             <p className="error-text">{streaming.error}</p>
           ) : null}
           {speechError ? <p className="error-text">{speechError}</p> : null}
+          {voiceProcessingResult ? (
+            <section aria-live="polite" className="voice-processing-card">
+              <div className="voice-processing-header">
+                <span className="eyebrow">Voice transcript refined</span>
+                <div className="chip-row">
+                  <span className="chip">
+                    Intent {voiceProcessingResult.intent}
+                  </span>
+                  <span className="chip">
+                    Detected {voiceProcessingResult.detectedLanguage}
+                  </span>
+                  <span className="chip">
+                    {voiceProcessingResult.fillerWords.length > 0
+                      ? `Removed ${voiceProcessingResult.fillerWords.join(", ")}`
+                      : "No fillers removed"}
+                  </span>
+                </div>
+              </div>
+              <dl className="stats-grid voice-processing-grid">
+                <div>
+                  <dt>Ready to send</dt>
+                  <dd>{voiceProcessingResult.rewrittenText}</dd>
+                </div>
+                <div>
+                  <dt>Target language</dt>
+                  <dd>{voiceProcessingResult.targetLanguage}</dd>
+                </div>
+                {voiceProcessingResult.translatedText !==
+                voiceProcessingResult.rewrittenText ? (
+                  <div className="stats-grid-item-wide">
+                    <dt>LM-ready translation</dt>
+                    <dd>{voiceProcessingResult.translatedText}</dd>
+                  </div>
+                ) : null}
+              </dl>
+            </section>
+          ) : null}
           <div className="voice-toolbar">
             <div className="voice-toolbar-copy">
               <span className="eyebrow">Voice</span>
@@ -2988,9 +3175,6 @@ export default function App() {
                     .replace(/-/g, " ")
                     .replace(/\b\w/g, (letter) => letter.toUpperCase())}
                 </span>
-                {(agentDetailQuery.data?.delegatedAgentIds ?? []).length > 0 ? (
-                  <span className="chip">Tool delegate-task</span>
-                ) : null}
                 {(agentDetailQuery.data?.delegatedAgentIds ?? []).map(
                   (agentId) => (
                     <span className="chip" key={`delegated-${agentId}`}>
@@ -3067,6 +3251,9 @@ export default function App() {
                 <span className="chip">
                   {speechReady ? "Speech connected" : "Speech unavailable"}
                 </span>
+                {speechTextProcessing ? (
+                  <span className="chip">Text cleanup ready</span>
+                ) : null}
                 {speechCapabilitiesQuery.data ? (
                   <span className="chip">
                     Voice {speechCapabilitiesQuery.data.synthesis.defaultVoice}
@@ -3131,6 +3318,22 @@ export default function App() {
                       )}
                     </dd>
                   </div>
+                  {speechTextProcessing ? (
+                    <>
+                      <div>
+                        <dt>NLP model</dt>
+                        <dd>{speechTextProcessing.model}</dd>
+                      </div>
+                      <div>
+                        <dt>Translation target</dt>
+                        <dd>{speechTextProcessing.targetLanguage}</dd>
+                      </div>
+                      <div className="stats-grid-item-wide">
+                        <dt>NLP features</dt>
+                        <dd>{speechTextProcessing.features.join(", ")}</dd>
+                      </div>
+                    </>
+                  ) : null}
                 </dl>
               ) : (
                 <p className="support-text detail-hint">
@@ -4283,6 +4486,14 @@ function buildPanelClassName(
   return `${baseClassName} ${
     activeSection === section ? "mobile-panel-active" : "mobile-panel-hidden"
   }`;
+}
+
+function formatWorkspaceLabel(workspaceId: string): string {
+  return workspaceId
+    .split(/[-_\s]+/g)
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function confirmSessionAction(

@@ -1,8 +1,8 @@
 import { EventSchemas, type Message, RunAgentInputSchema } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import {
-  createDelegationTool,
   DEFAULT_MODEL,
+  DELEGATION_TOOL_NAME,
   getPresetById,
   type ModelDescriptor,
   mergeRuntimeConfig,
@@ -14,9 +14,15 @@ import {
   speechCapabilitiesSchema,
   speechHealthSchema,
   speechSynthesisRequestSchema,
+  textProcessingRequestSchema,
+  textProcessingResultSchema,
   transcriptionResultSchema,
+  workspaceListingSchema,
 } from "@gemma-agent-pwa/contracts";
-import type { MinKbWorkspace } from "@gemma-agent-pwa/min-kb-bridge";
+import type {
+  MinKbWorkspace,
+  WorkspaceRegistry,
+} from "@gemma-agent-pwa/min-kb-bridge";
 import {
   deleteSession,
   getAgentById,
@@ -29,7 +35,7 @@ import {
   softDeleteSession,
   summarizeWorkspace,
 } from "@gemma-agent-pwa/min-kb-bridge";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamText } from "hono/streaming";
 import {
@@ -48,7 +54,6 @@ import {
   isSessionPersistenceCancelledError,
   resolveWritableSession,
 } from "./chat-session.js";
-import { executeDelegatedAgentTool } from "./delegation.js";
 import {
   getProviderModelCatalog,
   listAvailableModels,
@@ -68,6 +73,7 @@ import { buildRuntimeTools, executeRuntimeToolCall } from "./tool-runtime.js";
 
 const defaultSpeechServiceBaseUrl = "http://127.0.0.1:8790";
 const DEFAULT_NEW_CHAT_TITLE = "New Gemma chat";
+const DEFAULT_WORKSPACE_ID = "default";
 const TITLE_SUMMARY_PROMPT = [
   "Create a short conversation title that paraphrases the user's intent.",
   "Use 2 to 6 words in sentence case.",
@@ -76,7 +82,12 @@ const TITLE_SUMMARY_PROMPT = [
   "Return the title only.",
 ].join(" ");
 
-export function createApiApp(workspace: MinKbWorkspace) {
+export function createApiApp(workspaces: WorkspaceRegistry) {
+  const defaultWorkspace = workspaces.get(DEFAULT_WORKSPACE_ID);
+  if (!defaultWorkspace) {
+    throw new Error('Workspace registry must include a "default" workspace.');
+  }
+
   const app = new Hono();
   const allowedCorsOrigins = getAllowedCorsOrigins();
   app.use(
@@ -94,8 +105,24 @@ export function createApiApp(workspace: MinKbWorkspace) {
     return context.json({ error: error.message }, 500);
   });
 
+  app.get("/api/workspaces", async (context) => {
+    const summaries = await Promise.all(
+      [...workspaces.entries()].map(([workspaceId, workspace]) =>
+        summarizeWorkspace(workspaceId, workspace)
+      )
+    );
+    return context.json(
+      workspaceListingSchema.parse({
+        workspaces: summaries,
+        defaultId: DEFAULT_WORKSPACE_ID,
+      })
+    );
+  });
+
   app.get("/api/health", async (context) => {
-    const workspaceSummary = await summarizeWorkspace(workspace);
+    const workspaceId = resolveRequestWorkspaceId(context, workspaces);
+    const workspace = requireWorkspace(workspaces, workspaceId);
+    const workspaceSummary = await summarizeWorkspace(workspaceId, workspace);
     const { models, reachable: lmStudioReachable } =
       await getProviderModelCatalog();
     const defaultModel = chooseDefaultModel(models);
@@ -202,11 +229,43 @@ export function createApiApp(workspace: MinKbWorkspace) {
     return createUpstreamBodyResponse(upstream);
   });
 
+  const handleSpeechTextProcessing = async (context: Context) => {
+    const payload = textProcessingRequestSchema.parse(
+      (await context.req.json()) ?? {}
+    );
+    const upstream = await fetchSpeechUpstream(
+      "/v1/npl",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      },
+      "Speech text processing failed"
+    );
+    if (!upstream.ok) {
+      return forwardSpeechUpstreamError(
+        upstream,
+        "Speech text processing failed",
+        getSpeechServiceBaseUrl()
+      );
+    }
+    return context.json(
+      textProcessingResultSchema.parse(await upstream.json())
+    );
+  };
+
+  app.post("/api/speech/npl", handleSpeechTextProcessing);
+  app.post("/api/speech/text/process", handleSpeechTextProcessing);
+
   app.get("/api/agents", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     return context.json(await listAgents(workspace));
   });
 
   app.get("/api/agents/:agentId", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const agent = await getAgentById(workspace, context.req.param("agentId"));
     if (!agent) {
       return context.json({ error: "Agent not found." }, 404);
@@ -215,6 +274,7 @@ export function createApiApp(workspace: MinKbWorkspace) {
   });
 
   app.get("/api/agents/:agentId/sessions", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const state = sessionListStateSchema.parse(
       context.req.query("state") ?? "active"
     );
@@ -224,6 +284,7 @@ export function createApiApp(workspace: MinKbWorkspace) {
   });
 
   app.get("/api/agents/:agentId/sessions/:sessionId", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     return context.json(
       await getSession(
         workspace,
@@ -234,6 +295,7 @@ export function createApiApp(workspace: MinKbWorkspace) {
   });
 
   app.delete("/api/agents/:agentId/sessions/:sessionId", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const mode = sessionDeleteModeSchema.parse(
       context.req.query("mode") ?? "soft"
     );
@@ -253,16 +315,23 @@ export function createApiApp(workspace: MinKbWorkspace) {
     return context.body(null, 204);
   });
 
-  const scheduledTaskRunner = startScheduledTaskRunner({ workspace });
+  const scheduledTaskRunners = new Map(
+    [...workspaces.entries()].map(([workspaceId, workspace]) => [
+      workspaceId,
+      startScheduledTaskRunner({ workspace }),
+    ])
+  );
 
-  registerScheduledTaskRoutes(app, workspace, {
-    onScheduleMutation: scheduledTaskRunner.refresh,
+  registerScheduledTaskRoutes(app, workspaces, {
+    onScheduleMutation: (workspaceId) =>
+      scheduledTaskRunners.get(workspaceId)?.refresh(),
   });
-  registerPlannerRunRoutes(app, workspace);
+  registerPlannerRunRoutes(app, workspaces);
 
   app.post(
     "/api/agents/:agentId/sessions/:sessionId/restore",
     async (context) => {
+      const workspace = resolveRequestWorkspace(context, workspaces);
       await restoreSession(
         workspace,
         context.req.param("agentId"),
@@ -273,6 +342,7 @@ export function createApiApp(workspace: MinKbWorkspace) {
   );
 
   app.post("/api/agents/:agentId/chat", async (context) => {
+    const workspace = resolveRequestWorkspace(context, workspaces);
     const agentId = context.req.param("agentId");
     const input = RunAgentInputSchema.parse((await context.req.json()) ?? {});
     const forwardedProps = parseForwardedProps(input.forwardedProps);
@@ -317,14 +387,13 @@ export function createApiApp(workspace: MinKbWorkspace) {
       agentId,
       mergedConfig.disabledSkills
     );
-    const delegationTool = createDelegationTool({
-      agentTitle: agent.title,
-      delegatedAgentIds: agent.delegatedAgentIds ?? [],
-    });
+    const requestedToolNames = (input.tools ?? []).map((tool) => tool.name);
+    const droppedToolNames = requestedToolNames.filter(
+      (toolName) => toolName === DELEGATION_TOOL_NAME
+    );
     const tools = buildRuntimeTools({
       enabledSkills,
       extraTools: input.tools,
-      delegationTool,
     });
     logChatDebugMessage(
       buildChatRequestDebugLog({
@@ -346,8 +415,10 @@ export function createApiApp(workspace: MinKbWorkspace) {
           delegatedAgentIds: agent.delegatedAgentIds ?? [],
           executableSkillCount: enabledSkills.filter((skill) => skill.hasScript)
             .length,
+          requestedToolNames,
           skillNames: enabledSkills.map((skill) => skill.name),
           toolNames: tools.map((tool) => tool.name),
+          droppedToolNames,
         }
       )
     );
@@ -387,18 +458,6 @@ export function createApiApp(workspace: MinKbWorkspace) {
           executeToolCall: (call) =>
             executeRuntimeToolCall(call, {
               enabledSkills,
-              executeDelegation: (callInput) =>
-                executeDelegatedAgentTool(
-                  workspace,
-                  {
-                    allowedAgentIds: agent.delegatedAgentIds ?? [],
-                    parentAgentId: agentId,
-                    parentSessionId: userThread.sessionId,
-                    parentAgentTitle: agent.title,
-                    parentConfig: mergedConfig,
-                  },
-                  callInput
-                ),
             }),
           emitEvent: (event) => agUiStream.apply(event),
         });
@@ -637,6 +696,37 @@ function parseOrigin(origin: string): URL | undefined {
     }
     throw error;
   }
+}
+
+function resolveRequestWorkspace(
+  context: Context,
+  workspaces: WorkspaceRegistry
+): MinKbWorkspace {
+  return requireWorkspace(
+    workspaces,
+    resolveRequestWorkspaceId(context, workspaces)
+  );
+}
+
+function resolveRequestWorkspaceId(
+  context: Context,
+  workspaces: WorkspaceRegistry
+): string {
+  const requestedWorkspaceId = context.req.query("workspace");
+  return requestedWorkspaceId && workspaces.has(requestedWorkspaceId)
+    ? requestedWorkspaceId
+    : DEFAULT_WORKSPACE_ID;
+}
+
+function requireWorkspace(
+  workspaces: WorkspaceRegistry,
+  workspaceId: string
+): MinKbWorkspace {
+  const workspace = workspaces.get(workspaceId);
+  if (!workspace) {
+    throw new Error(`Workspace is not configured: ${workspaceId}`);
+  }
+  return workspace;
 }
 
 function getSpeechServiceBaseUrl(): string {

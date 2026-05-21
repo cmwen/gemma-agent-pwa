@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { getPreferredTheme, type ThemeMode } from "../app-utils";
 
 interface AppStore {
+  selectedWorkspaceId: string;
   selectedAgentId?: string;
   selectedSessionIds: Record<string, string | null>;
   lastScheduledRunNotifications: Record<string, string>;
@@ -12,6 +13,7 @@ interface AppStore {
   notificationsEnabled: boolean;
   autoPlayReplies: boolean;
   handsFreeVoiceTurns: boolean;
+  setSelectedWorkspaceId: (workspaceId: string) => void;
   setSelectedAgentId: (agentId?: string) => void;
   setSelectedSessionId: (agentId: string, sessionId?: string | null) => void;
   setLastScheduledRunNotification: (scheduleId: string, runId: string) => void;
@@ -30,6 +32,7 @@ type PersistedAppStoreState = Pick<
   | "handsFreeVoiceTurns"
   | "modelDetailsOpen"
   | "notificationsEnabled"
+  | "selectedWorkspaceId"
   | "selectedAgentId"
   | "selectedSessionIds"
   | "themeMode"
@@ -39,6 +42,7 @@ export function partializeAppStoreState(
   state: AppStore
 ): PersistedAppStoreState {
   return {
+    selectedWorkspaceId: state.selectedWorkspaceId,
     selectedAgentId: state.selectedAgentId,
     selectedSessionIds: state.selectedSessionIds,
     lastScheduledRunNotifications: state.lastScheduledRunNotifications,
@@ -53,6 +57,7 @@ export function partializeAppStoreState(
 export const useAppStore = create<AppStore>()(
   persist(
     (set) => ({
+      selectedWorkspaceId: "default",
       selectedAgentId: undefined,
       selectedSessionIds: {},
       lastScheduledRunNotifications: {},
@@ -62,12 +67,15 @@ export const useAppStore = create<AppStore>()(
       notificationsEnabled: false,
       autoPlayReplies: true,
       handsFreeVoiceTurns: true,
+      setSelectedWorkspaceId: (selectedWorkspaceId) =>
+        set({ selectedWorkspaceId }),
       setSelectedAgentId: (agentId) => set({ selectedAgentId: agentId }),
       setSelectedSessionId: (agentId, sessionId) =>
         set((state) => ({
           selectedSessionIds: {
             ...state.selectedSessionIds,
-            [agentId]: sessionId ?? null,
+            [buildScopedAgentKey(state.selectedWorkspaceId, agentId)]:
+              sessionId ?? null,
           },
         })),
       setLastScheduledRunNotification: (scheduleId, runId) =>
@@ -101,21 +109,31 @@ export const useAppStore = create<AppStore>()(
 
 export function hasStoredSessionSelection(
   selectedSessionIds: Record<string, string | null>,
+  workspaceId: string,
   agentId: string
 ): boolean {
-  return Object.hasOwn(selectedSessionIds, agentId);
+  return Object.hasOwn(selectedSessionIds, buildScopedAgentKey(workspaceId, agentId));
 }
 
 export function getSelectedSessionId(
   selectedSessionIds: Record<string, string | null>,
+  workspaceId: string,
   agentId?: string
 ): string | undefined {
   if (!agentId) {
     return undefined;
   }
-  return selectedSessionIds[agentId] ?? undefined;
+  return selectedSessionIds[buildScopedAgentKey(workspaceId, agentId)] ?? undefined;
 }
 
-export function buildDraftKey(agentId?: string, sessionId?: string): string {
-  return `${agentId ?? "unknown"}:${sessionId ?? "new"}`;
+export function buildDraftKey(
+  workspaceId: string,
+  agentId?: string,
+  sessionId?: string
+): string {
+  return `${workspaceId}:${agentId ?? "unknown"}:${sessionId ?? "new"}`;
+}
+
+function buildScopedAgentKey(workspaceId: string, agentId: string): string {
+  return `${workspaceId}:${agentId}`;
 }

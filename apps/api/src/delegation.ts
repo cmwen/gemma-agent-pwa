@@ -1,9 +1,5 @@
 import type { ChatRuntimeConfig } from "@gemma-agent-pwa/contracts";
-import {
-  createDelegationTool,
-  getPresetById,
-  mergeRuntimeConfig,
-} from "@gemma-agent-pwa/contracts";
+import { getPresetById, mergeRuntimeConfig } from "@gemma-agent-pwa/contracts";
 import type { MinKbWorkspace } from "@gemma-agent-pwa/min-kb-bridge";
 import {
   getAgentById,
@@ -85,13 +81,8 @@ export async function executeDelegatedAgentTool(
     targetAgent.id,
     runtimeConfig.disabledSkills
   );
-  const delegationTool = createDelegationTool({
-    agentTitle: targetAgent.title,
-    delegatedAgentIds: targetAgent.delegatedAgentIds ?? [],
-  });
   const tools = buildRuntimeTools({
     enabledSkills,
-    delegationTool,
   });
   const loopResult = await runChatLoop({
     agentId: targetAgent.id,
@@ -105,13 +96,6 @@ export async function executeDelegatedAgentTool(
     executeToolCall: (call) =>
       executeRuntimeToolCall(call, {
         enabledSkills,
-        executeDelegation: input.executeToolCall
-          ? (callInput) =>
-              input.executeToolCall?.({
-                skillName: call.skillName,
-                input: callInput,
-              })
-          : undefined,
       }),
   });
   const assistantSummary = summarizeThread(loopResult.assistantText);

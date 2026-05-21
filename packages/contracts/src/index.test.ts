@@ -14,6 +14,9 @@ import {
   requireConfiguredProvider,
   scheduledTaskCreateSchema,
   scheduledTaskSchema,
+  speechCapabilitiesSchema,
+  speechHealthSchema,
+  textProcessingResultSchema,
 } from "./index";
 
 describe("runtime config helpers", () => {
@@ -226,6 +229,85 @@ describe("LLM stats normalization", () => {
       outputTokens: 6,
       durationMs: 0,
       tokensPerSecond: 0,
+    });
+  });
+
+  describe("speech schemas", () => {
+    it("accepts the extended min-speech-service health payload", () => {
+      expect(
+        speechHealthSchema.parse({
+          ok: true,
+          provider: "openai-compatible",
+          upstreamOk: true,
+          upstreamBaseUrl: "http://127.0.0.1:8000",
+          sttModel: "Systran/faster-distil-whisper-small.en",
+          ttsModel: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+          defaultVoice: "af_heart",
+          nlpModel: "gemma-4-e4b",
+          nlpUpstreamOk: true,
+          nlpUpstreamBaseUrl: "http://127.0.0.1:1234",
+        })
+      ).toMatchObject({
+        nlpModel: "gemma-4-e4b",
+        nlpUpstreamOk: true,
+      });
+    });
+
+    it("parses speech capabilities that advertise text processing", () => {
+      expect(
+        speechCapabilitiesSchema.parse({
+          provider: "openai-compatible",
+          upstreamBaseUrl: "http://127.0.0.1:8000",
+          transcription: {
+            endpoint: "/v1/audio/transcriptions",
+            model: "Systran/faster-distil-whisper-small.en",
+            responseFormats: ["text", "json"],
+          },
+          synthesis: {
+            endpoint: "/v1/audio/speech",
+            model: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+            defaultVoice: "af_heart",
+            responseFormats: ["wav"],
+          },
+          realtime: {
+            supported: false,
+          },
+          textProcessing: {
+            endpoint: "/v1/npl",
+            model: "gemma-4-e4b",
+            targetLanguage: "en",
+            features: ["intent-detection", "translation"],
+          },
+        })
+      ).toMatchObject({
+        textProcessing: {
+          model: "gemma-4-e4b",
+          targetLanguage: "en",
+        },
+      });
+    });
+
+    it("parses text-processing results from min-speech-service", () => {
+      expect(
+        textProcessingResultSchema.parse({
+          sourceText: "um can you email the summary",
+          detectedLanguage: "en",
+          intent: "Ask to email the summary",
+          cleanedText: "can you email the summary",
+          rewrittenText: "Can you email the summary?",
+          translatedText: "Can you email the summary?",
+          targetLanguage: "en",
+          fillerWords: ["um"],
+          model: "gemma-4-e4b",
+          provider: "openai-compatible",
+          raw: {
+            detectedLanguage: "en",
+          },
+        })
+      ).toMatchObject({
+        intent: "Ask to email the summary",
+        fillerWords: ["um"],
+      });
     });
   });
 

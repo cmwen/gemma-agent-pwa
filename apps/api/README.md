@@ -14,12 +14,14 @@ Local Hono API for the PWA. It exposes agent, session, model, and chat routes, t
 
 | Route | Purpose |
 | --- | --- |
+| `GET /api/workspaces` | List configured workspaces/tenants |
 | `GET /api/health` | Workspace summary plus LM Studio availability |
 | `GET /api/models` | LM Studio model catalog |
 | `GET /api/speech/health` | Reachability and configured speech defaults from `min-speech-service` |
 | `GET /api/speech/capabilities` | Browser-facing STT/TTS capability discovery |
 | `POST /api/speech/transcriptions` | Proxy browser microphone uploads to speech-to-text |
 | `POST /api/speech/speech` | Proxy assistant reply synthesis and stream audio bytes back |
+| `POST /api/speech/npl` | Proxy transcript cleanup, intent detection, and translation |
 | `GET /api/agents` | Agent summaries from `min-kb-store` |
 | `GET /api/agents/:agentId` | Single agent details |
 | `GET /api/agents/:agentId/sessions` | Session history for an agent |
@@ -45,7 +47,7 @@ Local Hono API for the PWA. It exposes agent, session, model, and chat routes, t
 ## Speech integration
 
 - The API keeps browser speech calls on the same origin and forwards them to `min-speech-service`.
-- It validates health/capability JSON and synthesis/transcription payloads with shared Zod schemas from `@gemma-agent-pwa/contracts`.
+- It validates health/capability JSON plus synthesis, transcription, and NPL/text-processing payloads with shared Zod schemas from `@gemma-agent-pwa/contracts`.
 - This repo's speech scope is **turn-based request/response** audio, not realtime proxying.
 
 ## Local development
@@ -56,4 +58,10 @@ pnpm --filter @gemma-agent-pwa/api build
 pnpm test
 ```
 
-The API expects `MIN_KB_STORE_ROOT` to point at a valid `min-kb-store` checkout. `LM_STUDIO_BASE_URL` and `LM_STUDIO_MODEL` can override the default local LM Studio connection. Set `MIN_SPEECH_SERVICE_URL` when the speech facade is not running on `http://127.0.0.1:8790`.
+The API expects `MIN_KB_STORE_ROOT` to point at a valid `min-kb-store`
+checkout. Set `MIN_KB_TEST_STORE_ROOT` to expose a second testing workspace in
+the same server process. Workspace-scoped routes accept `?workspace=<id>` and
+fall back to `default` when the parameter is omitted. `LM_STUDIO_BASE_URL` and
+`LM_STUDIO_MODEL` can override the default local LM Studio connection. Set
+`MIN_SPEECH_SERVICE_URL` when the speech facade is not running on
+`http://127.0.0.1:8790`.

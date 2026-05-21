@@ -14,21 +14,19 @@ import {
 export function buildRuntimeTools(input: {
   enabledSkills: LoadedSkillDocument[];
   extraTools?: ChatTool[];
-  delegationTool?: ChatTool;
 }): ChatTool[] {
   const toolsByName = new Map<string, ChatTool>();
 
   for (const tool of input.extraTools ?? []) {
+    if (tool.name === DELEGATION_TOOL_NAME) {
+      continue;
+    }
     toolsByName.set(tool.name, tool);
   }
 
   const loadSkillTool = createLoadSkillTool(input.enabledSkills);
   if (loadSkillTool) {
     toolsByName.set(loadSkillTool.name, loadSkillTool);
-  }
-
-  if (input.delegationTool) {
-    toolsByName.set(input.delegationTool.name, input.delegationTool);
   }
 
   return [...toolsByName.values()];
@@ -38,7 +36,6 @@ export async function executeRuntimeToolCall(
   call: SkillCallRequest,
   input: {
     enabledSkills: LoadedSkillDocument[];
-    executeDelegation?: (callInput: string) => Promise<SkillCallResult>;
   }
 ): Promise<SkillCallResult> {
   if (call.skillName === LOAD_SKILL_TOOL_NAME) {
@@ -46,10 +43,6 @@ export async function executeRuntimeToolCall(
   }
 
   if (call.skillName === DELEGATION_TOOL_NAME) {
-    if (input.executeDelegation) {
-      return input.executeDelegation(call.input);
-    }
-
     return {
       skillName: DELEGATION_TOOL_NAME,
       exitCode: 1,

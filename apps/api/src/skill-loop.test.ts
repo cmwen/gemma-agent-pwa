@@ -1,17 +1,13 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createDelegationTool } from "@gemma-agent-pwa/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSkillScript, parseSkillCalls } from "./agent-skills.js";
 import { __testing as chatLoopTesting, runChatLoop } from "./chat-loop.js";
 import { __testing as lmstudioTesting } from "./lmstudio.js";
 
-const {
-  DEFAULT_MAX_SKILL_LOOP_ITERATIONS,
-  FINALIZE_AFTER_SKILLS_INSTRUCTION,
-  MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS,
-} = chatLoopTesting;
+const { DEFAULT_MAX_SKILL_LOOP_ITERATIONS, FINALIZE_AFTER_SKILLS_INSTRUCTION } =
+  chatLoopTesting;
 const { buildSystemPrompt } = lmstudioTesting;
 
 describe("agentic skill loop", () => {
@@ -269,6 +265,45 @@ describe("agentic skill loop", () => {
     expect(result.output).toBe(
       "date=today|text=Today is a holiday.|ensure=yes"
     );
+  });
+
+  it("preserves literal backslash escapes inside legacy quoted string arguments", async () => {
+    const scriptPath = path.join(tmpDir, "run.py");
+    await fs.writeFile(
+      scriptPath,
+      [
+        "import argparse",
+        "",
+        "parser = argparse.ArgumentParser()",
+        'parser.add_argument("--repo", required=True)',
+        "args = parser.parse_args()",
+        "print(repr(args.repo))",
+      ].join("\n"),
+      { mode: 0o755 }
+    );
+
+    const skill = {
+      name: "git-checkpoint-push",
+      description: "Commits and pushes changes",
+      scope: "agent-local" as const,
+      path: path.join(tmpDir, "SKILL.md"),
+      sourceRoot: tmpDir,
+      hasScript: true,
+      scriptPath,
+      content: "Commits and pushes changes.",
+    };
+
+    const [call] = parseSkillCalls(
+      '<|tool_call>call:git-checkpoint-push{repo:"~/sy\\nc/logseq,~/dev/mi\\n-kb-store"}<tool_call|>'
+    );
+    if (!call) {
+      throw new Error("Expected git-checkpoint-push call");
+    }
+
+    const result = await executeSkillScript(skill, call.input);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe("'~/sy\\\\nc/logseq,~/dev/mi\\\\n-kb-store'");
   });
 
   it("retries single-field JSON input as a positional argument for argparse-style skills", async () => {
@@ -680,7 +715,7 @@ describe("runChatLoop", () => {
     );
   });
 
-  it("waits for the delegation tool result before finalizing", async () => {
+  it("reports delegation tool calls as unavailable when the tool is disabled", async () => {
     const streamChat = vi
       .fn()
       .mockResolvedValueOnce({
@@ -696,7 +731,7 @@ describe("runChatLoop", () => {
         },
       })
       .mockResolvedValueOnce({
-        assistantText: "Delegation complete.",
+        assistantText: "Continue without delegation.",
         llmStats: {
           recordedAt: "2026-04-27T00:00:00.000Z",
           model: "google/gemma-3-4b",
@@ -706,11 +741,7 @@ describe("runChatLoop", () => {
           durationMs: 110,
         },
       });
-    const executeToolCall = vi.fn().mockResolvedValue({
-      skillName: "delegate-task",
-      output: "Delegated to qa-tasker.",
-      exitCode: 0,
-    });
+    const executeToolCall = vi.fn();
 
     const result = await runChatLoop({
       agentId: "release-orchestrator",
@@ -736,40 +767,27 @@ describe("runChatLoop", () => {
         },
       ],
       enabledSkills: [],
-      tools: [
-        (() => {
-          const delegationTool = createDelegationTool({
-            agentTitle: "Release Orchestrator",
-            delegatedAgentIds: ["qa-tasker"],
-          });
-          if (!delegationTool) {
-            throw new Error("Expected delegation tool.");
-          }
-          return delegationTool;
-        })(),
-      ],
       sessionId: "session-delegation",
       streamChat,
       executeToolCall,
     });
 
-    expect(result.assistantText).toBe("Delegation complete.");
-    expect(executeToolCall).toHaveBeenCalledWith({
-      skillName: "delegate-task",
-      input: '{"agentId":"qa-tasker","prompt":"Check the release checklist."}',
-    });
+    expect(result.assistantText).toBe("Continue without delegation.");
+    expect(executeToolCall).not.toHaveBeenCalled();
     expect(result.conversationTurns).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           sender: "tool",
-          bodyMarkdown: expect.stringContaining("Delegated to qa-tasker."),
+          bodyMarkdown: expect.stringContaining(
+            "Delegation tool is not configured in this runtime."
+          ),
         }),
       ])
     );
     expect(streamChat).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the latest tool result when LM Studio omits the final assistant text", async () => {
+  it("falls back to the delegation-disabled result when LM Studio omits the final assistant text", async () => {
     const streamChat = vi
       .fn()
       .mockResolvedValueOnce({
@@ -795,11 +813,6 @@ describe("runChatLoop", () => {
           durationMs: 110,
         },
       });
-    const executeToolCall = vi.fn().mockResolvedValue({
-      skillName: "delegate-task",
-      output: "Delegated to qa-tasker.\n\nSummary: Checklist verified.",
-      exitCode: 0,
-    });
 
     const result = await runChatLoop({
       agentId: "release-orchestrator",
@@ -825,30 +838,17 @@ describe("runChatLoop", () => {
         },
       ],
       enabledSkills: [],
-      tools: [
-        (() => {
-          const delegationTool = createDelegationTool({
-            agentTitle: "Release Orchestrator",
-            delegatedAgentIds: ["qa-tasker"],
-          });
-          if (!delegationTool) {
-            throw new Error("Expected delegation tool.");
-          }
-          return delegationTool;
-        })(),
-      ],
       sessionId: "session-delegation-fallback",
       streamChat,
-      executeToolCall,
     });
 
     expect(result.assistantText).toBe(
-      "Delegated to qa-tasker.\n\nSummary: Checklist verified."
+      "Delegation tool is not configured in this runtime."
     );
     expect(streamChat).toHaveBeenCalledTimes(2);
   });
 
-  it("executes inline Gemma delegation tool calls with non-English prompts", async () => {
+  it("keeps inline Gemma delegation calls non-executable when delegation is disabled", async () => {
     const streamChat = vi
       .fn()
       .mockResolvedValueOnce({
@@ -864,7 +864,7 @@ describe("runChatLoop", () => {
         },
       })
       .mockResolvedValueOnce({
-        assistantText: "已委派給 writer。",
+        assistantText: "無法在這個執行環境中委派工作。",
         llmStats: {
           recordedAt: "2026-04-27T00:00:00.000Z",
           model: "google/gemma-4-e2b",
@@ -874,11 +874,7 @@ describe("runChatLoop", () => {
           durationMs: 110,
         },
       });
-    const executeToolCall = vi.fn().mockResolvedValue({
-      skillName: "delegate-task",
-      output: "Delegated to writer.",
-      exitCode: 0,
-    });
+    const executeToolCall = vi.fn();
 
     const result = await runChatLoop({
       agentId: "fiction-generator",
@@ -905,29 +901,23 @@ describe("runChatLoop", () => {
         },
       ],
       enabledSkills: [],
-      tools: [
-        (() => {
-          const delegationTool = createDelegationTool({
-            agentTitle: "Fiction Generator",
-            delegatedAgentIds: ["writer"],
-          });
-          if (!delegationTool) {
-            throw new Error("Expected delegation tool.");
-          }
-          return delegationTool;
-        })(),
-      ],
       sessionId: "session-inline-delegation",
       streamChat,
       executeToolCall,
     });
 
-    expect(result.assistantText).toBe("已委派給 writer。");
-    expect(executeToolCall).toHaveBeenCalledWith({
-      skillName: "delegate-task",
-      input:
-        '{"agentId":"writer","prompt":"請用繁體中文撰寫一篇關於 Oby 成為世界知名足球員的小說。"}',
-    });
+    expect(result.assistantText).toBe("無法在這個執行環境中委派工作。");
+    expect(executeToolCall).not.toHaveBeenCalled();
+    expect(result.conversationTurns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sender: "tool",
+          bodyMarkdown: expect.stringContaining(
+            "Delegation tool is not configured in this runtime."
+          ),
+        }),
+      ])
+    );
   });
 
   it("executes legacy split tool calls emitted by Gemma-style outputs", async () => {
@@ -1131,11 +1121,11 @@ describe("runChatLoop", () => {
     expect(streamChat).toHaveBeenCalledTimes(3);
   });
 
-  it("allows orchestrators to continue beyond the default skill loop budget", async () => {
+  it("uses the default skill loop budget even for legacy orchestrator kinds", async () => {
     const streamChat = vi.fn();
     for (
       let iteration = 0;
-      iteration < DEFAULT_MAX_SKILL_LOOP_ITERATIONS + 1;
+      iteration < DEFAULT_MAX_SKILL_LOOP_ITERATIONS;
       iteration += 1
     ) {
       streamChat.mockResolvedValueOnce({
@@ -1150,17 +1140,6 @@ describe("runChatLoop", () => {
         },
       });
     }
-    streamChat.mockResolvedValueOnce({
-      assistantText: "Orchestration complete.",
-      llmStats: {
-        recordedAt: "2026-04-27T00:00:00.000Z",
-        model: "google/gemma-3-4b",
-        requestCount: 1,
-        inputTokens: 10,
-        outputTokens: 4,
-        durationMs: 100,
-      },
-    });
     const executeSkill = vi.fn().mockResolvedValue({
       skillName: "search-store",
       output: "Completed delegated step.",
@@ -1208,14 +1187,9 @@ describe("runChatLoop", () => {
       executeSkill,
     });
 
-    expect(result.assistantText).toBe("Orchestration complete.");
-    expect(streamChat).toHaveBeenCalledTimes(
-      DEFAULT_MAX_SKILL_LOOP_ITERATIONS + 2
-    );
+    expect(result.assistantText).toBe("Completed delegated step.");
+    expect(streamChat).toHaveBeenCalledTimes(DEFAULT_MAX_SKILL_LOOP_ITERATIONS);
     expect(executeSkill).toHaveBeenCalledTimes(
-      DEFAULT_MAX_SKILL_LOOP_ITERATIONS + 1
-    );
-    expect(MAX_ORCHESTRATOR_SKILL_LOOP_ITERATIONS).toBeGreaterThan(
       DEFAULT_MAX_SKILL_LOOP_ITERATIONS
     );
   });

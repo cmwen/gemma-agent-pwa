@@ -1,0 +1,11 @@
+{
+  "provider": "lmstudio",
+  "model": "google/gemma-4-e2b",
+  "presetId": "gemma4-balanced",
+  "lmStudioEnableThinking": true,
+  "maxCompletionTokens": 4096,
+  "contextWindowSize": 32768,
+  "temperature": 0.2,
+  "topP": 0.95,
+  "disabledSkills": []
+}

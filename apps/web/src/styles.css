@@ -925,6 +925,24 @@ kbd {
   justify-content: flex-end;
 }
 
+.voice-processing-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border: 1px solid var(--surface-border-soft);
+  border-radius: 1rem;
+  background: var(--panel-bg-soft);
+}
+
+.voice-processing-header {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.voice-processing-grid {
+  margin-top: 0;
+}
+
 .voice-toggle.is-active {
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   background: var(--accent-soft);
@@ -1121,6 +1139,10 @@ kbd {
   padding: 0.85rem;
 }
 
+.stats-grid-item-wide {
+  grid-column: 1 / -1;
+}
+
 .stats-grid dt {
   color: var(--text-muted);
   font-size: 0.78rem;
@@ -1129,6 +1151,7 @@ kbd {
 .stats-grid dd {
   margin: 0.3rem 0 0;
   font-size: 0.92rem;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {

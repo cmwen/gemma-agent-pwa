@@ -193,24 +193,6 @@ export function composeAgentPrompt(input: {
   delegatedAgentIds: string[];
   skillNames: string[];
 }): string {
-  const delegationSection =
-    input.delegatedAgentIds.length > 0 ||
-    input.kind === "planner" ||
-    input.kind === "orchestrator"
-      ? [
-          "## Execution mode",
-          "",
-          `Agent type: ${input.kind}`,
-          input.delegatedAgentIds.length > 0
-            ? [
-                "Delegation is available through the `delegate-task` tool.",
-                "Use it as the preferred path for work that should be handled by another agent, and wait for the tool result before continuing.",
-                `Allowed delegated agents: ${input.delegatedAgentIds.join(", ")}.`,
-              ].join("\n")
-            : "Delegation is not configured for this agent.",
-        ].join("\n")
-      : undefined;
-
   const sections = [
     "You are a custom agent loaded from min-kb-store. Follow the layered Markdown contract below.",
     `## Default persona\n\n${input.defaultSoul.trim()}`,
@@ -221,7 +203,6 @@ export function composeAgentPrompt(input: {
     input.skillNames.length > 0
       ? `## Available skill names\n\n${input.skillNames.map((skillName) => `- ${skillName}`).join("\n")}`
       : undefined,
-    delegationSection,
   ].filter((section): section is string => Boolean(section));
 
   return `${sections.join("\n\n")}\n`;
@@ -230,21 +211,9 @@ export function composeAgentPrompt(input: {
 function normalizeAgentKind(
   metadata: Record<string, unknown>
 ): AgentSummary["kind"] {
-  const candidates = [
-    metadata.kind,
-    metadata.agentType,
-    metadata.agent_type,
-    metadata.type,
-  ].filter((value): value is string => typeof value === "string");
-  const normalized = candidates[0]?.trim().toLowerCase();
-  if (
-    normalized === "planner" ||
-    normalized === "orchestrator" ||
-    normalized === "chat"
-  ) {
-    return normalized;
-  }
-  return "chat";
+  return resolveConfiguredAgentKind(metadata) === "planner"
+    ? "planner"
+    : "chat";
 }
 
 function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
@@ -270,7 +239,7 @@ function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
 async function resolveDelegatedAgentIds(
   workspace: MinKbWorkspace,
   agentId: string,
-  kind: AgentSummary["kind"],
+  _kind: AgentSummary["kind"],
   metadata: Record<string, unknown>
 ): Promise<string[]> {
   const availableAgentIds = new Set(
@@ -285,13 +254,33 @@ async function resolveDelegatedAgentIds(
     );
   }
 
-  if (kind === "orchestrator") {
+  if (resolveConfiguredAgentKind(metadata) === "orchestrator") {
     return [];
   }
 
   return [...availableAgentIds]
     .filter((candidate) => candidate.length > 0 && candidate !== agentId)
     .sort((left, right) => left.localeCompare(right));
+}
+
+function resolveConfiguredAgentKind(
+  metadata: Record<string, unknown>
+): AgentSummary["kind"] | "orchestrator" {
+  const candidates = [
+    metadata.kind,
+    metadata.agentType,
+    metadata.agent_type,
+    metadata.type,
+  ].filter((value): value is string => typeof value === "string");
+  const normalized = candidates[0]?.trim().toLowerCase();
+  if (
+    normalized === "planner" ||
+    normalized === "orchestrator" ||
+    normalized === "chat"
+  ) {
+    return normalized;
+  }
+  return "chat";
 }
 
 function resolveAgentReferenceId(
