@@ -417,7 +417,9 @@ export async function streamChat(
   );
   const persistedThread =
     !callbacks.thread && !request.title
-      ? await fetchCompletedThread(agentId, threadId, workspaceId)
+      ? await fetchCompletedThread(agentId, threadId, workspaceId).catch(
+          () => undefined
+        )
       : undefined;
   callbacks.onEvent({
     type: "complete",

@@ -2651,7 +2651,13 @@ export default function App() {
           {agentsQuery.data?.map((agent) => (
             <button
               aria-pressed={agent.id === selectedAgentId}
-              className={`agent-card ${agent.id === selectedAgentId ? "is-active" : ""}`}
+              className={[
+                "agent-card",
+                agent.id === selectedAgentId ? "is-active" : "",
+                agent.kind === "orchestrator" ? "agent-card--orchestrator" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               data-roving-focus="true"
               key={agent.id}
               onKeyDown={(event) =>
@@ -2671,6 +2677,13 @@ export default function App() {
               </div>
               <p>{agent.description}</p>
               <div className="chip-row">
+                {agent.kind !== "chat" && (
+                  <span
+                    className={`chip agent-kind-badge agent-kind-badge--${agent.kind}`}
+                  >
+                    {agent.kind}
+                  </span>
+                )}
                 <span className="chip">{agent.id}</span>
                 <span className="chip">{agent.skillNames.length} skills</span>
               </div>
@@ -2822,9 +2835,20 @@ export default function App() {
         >
           <header className="chat-header">
             <div className="chat-header-summary">
-              <p className="eyebrow">Local Gemma chat</p>
+              {selectedAgent ? (
+                <div className="chat-header-agent">
+                  <span className="eyebrow">{selectedAgent.title}</span>
+                  <span
+                    className={`chip agent-kind-badge agent-kind-badge--${selectedAgent.kind}`}
+                  >
+                    {selectedAgent.kind}
+                  </span>
+                </div>
+              ) : (
+                <p className="eyebrow">Local Gemma chat</p>
+              )}
               <h2 className="chat-header-title">
-                {thread?.title ?? selectedAgent?.title ?? "Choose an agent"}
+                {thread?.title ?? (selectedAgent ? "New conversation" : "Choose an agent")}
               </h2>
               <div className="chat-header-meta">
                 <p className="support-text chat-header-status">

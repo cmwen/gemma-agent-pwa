@@ -456,6 +456,40 @@ kbd {
   background: var(--danger-soft);
 }
 
+/* Agent kind badge (chat, planner, orchestrator) */
+.agent-kind-badge {
+  text-transform: capitalize;
+}
+
+.agent-kind-badge--orchestrator {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.agent-kind-badge--planner {
+  background: color-mix(in srgb, #a78bfa 22%, transparent);
+  color: color-mix(in srgb, #7c3aed 70%, var(--text-primary));
+}
+
+/* Pinned orchestrator agent card */
+.agent-card--orchestrator {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  border-left-width: 3px;
+}
+
+.agent-card--orchestrator.is-active {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+}
+
+/* Active agent display in chat header */
+.chat-header-agent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+
 .status-generating {
   background: var(--status-generating);
 }

@@ -59,6 +59,16 @@ import {
   listAvailableModels,
   streamProviderChat,
 } from "./llm-provider.js";
+import {
+  buildOrchestratorAgentSummary,
+  buildOrchestratorRoutingConfig,
+  buildRoutingSystemPrompt,
+  chooseOrchestratorModel,
+  logOrchestratorFallback,
+  logOrchestratorRoutingDecision,
+  ORCHESTRATOR_AGENT_ID,
+  routeToAgent,
+} from "./orchestrator.js";
 import { registerPlannerRunRoutes } from "./planner-runs.js";
 import {
   registerScheduledTaskRoutes,
@@ -132,7 +142,7 @@ export function createApiApp(workspaces: WorkspaceRegistry) {
       ok: true,
       workspace: workspaceSummary,
       lmStudioReachable,
-      speechReachable: Boolean(speech?.ok),
+      speechReachable: Boolean(speech),
       ...(speech ? { speech } : {}),
       ...(speechStatus.issue ? { speechIssue: speechStatus.issue } : {}),
       ...(defaultModel ? { defaultModel: defaultModel.id } : {}),
@@ -261,12 +271,22 @@ export function createApiApp(workspaces: WorkspaceRegistry) {
 
   app.get("/api/agents", async (context) => {
     const workspace = resolveRequestWorkspace(context, workspaces);
-    return context.json(await listAgents(workspace));
+    const agents = await listAgents(workspace);
+    const orchestrator = buildOrchestratorAgentSummary(workspace);
+    // Inject orchestrator first so it is always pinned at the top of the list
+    return context.json([
+      orchestrator,
+      ...agents.filter((a) => a.id !== ORCHESTRATOR_AGENT_ID),
+    ]);
   });
 
   app.get("/api/agents/:agentId", async (context) => {
     const workspace = resolveRequestWorkspace(context, workspaces);
-    const agent = await getAgentById(workspace, context.req.param("agentId"));
+    const agentId = context.req.param("agentId");
+    if (agentId === ORCHESTRATOR_AGENT_ID) {
+      return context.json(buildOrchestratorAgentSummary(workspace));
+    }
+    const agent = await getAgentById(workspace, agentId);
     if (!agent) {
       return context.json({ error: "Agent not found." }, 404);
     }
@@ -346,6 +366,197 @@ export function createApiApp(workspaces: WorkspaceRegistry) {
     const agentId = context.req.param("agentId");
     const input = RunAgentInputSchema.parse((await context.req.json()) ?? {});
     const forwardedProps = parseForwardedProps(input.forwardedProps);
+
+    // ------------------------------------------------------------------
+    // Orchestrator: route the request to the most suitable specialist agent
+    // ------------------------------------------------------------------
+    if (agentId === ORCHESTRATOR_AGENT_ID) {
+      const prompt = extractLatestUserPrompt(input.messages).trim();
+      const threadId = input.threadId ?? crypto.randomUUID();
+
+      const allAgents = await listAgents(workspace);
+      const candidates = allAgents.filter((a) => a.id !== ORCHESTRATOR_AGENT_ID);
+
+      const encoder = new EventEncoder({
+        accept: context.req.header("accept"),
+      });
+      context.header("cache-control", "no-store");
+      context.header("content-type", encoder.getContentType());
+
+      return streamText(context, async (stream) => {
+        const sendEvent = async (event: unknown) => {
+          const parsedEvent = EventSchemas.parse(event);
+          await stream.write(encoder.encode(parsedEvent));
+        };
+        let pendingWrite = Promise.resolve();
+        const queueEvent = (event: unknown) => {
+          pendingWrite = pendingWrite.then(() => sendEvent(event));
+          return pendingWrite;
+        };
+        const agUiStream = createAgUiEventMapper({
+          emitEvent: queueEvent,
+          runId: input.runId,
+          threadId,
+        });
+
+        try {
+          await agUiStream.start();
+
+          if (candidates.length === 0) {
+            await agUiStream.fail("No agents available to route to.");
+            await pendingWrite;
+            return;
+          }
+
+          // Fast single-pass routing call
+          const availableModels = await listAvailableModels();
+          const defaultModel =
+            chooseDefaultModel(availableModels)?.id ?? DEFAULT_MODEL;
+          const routingModel = chooseOrchestratorModel(
+            availableModels,
+            defaultModel
+          );
+          const routingConfig = buildOrchestratorRoutingConfig(routingModel);
+          const systemPrompt = buildRoutingSystemPrompt(candidates);
+
+          const routing = await routeToAgent({
+            systemPrompt,
+            userMessage: prompt,
+            model: routingModel,
+            config: routingConfig,
+            candidates,
+          });
+
+          logOrchestratorRoutingDecision({
+            model: routingModel,
+            userPrompt: prompt,
+            rawResponse: routing.rawResponse,
+            chosenAgentId: routing.agent.id,
+            durationMs: routing.durationMs,
+            candidateCount: candidates.length,
+          });
+
+          // Load full details of the chosen target agent
+          const targetAgent = await getAgentById(
+            workspace,
+            routing.agent.id
+          );
+          if (!targetAgent) {
+            logOrchestratorFallback({
+              reason: `Agent ${routing.agent.id} not found after routing`,
+              fallbackAgentId: routing.agent.id,
+            });
+            await agUiStream.fail(
+              `Routed agent "${routing.agent.id}" could not be loaded.`
+            );
+            await pendingWrite;
+            return;
+          }
+
+          // Merge runtime config: target agent defaults + user overrides
+          const mergedConfig = mergeRuntimeConfig(
+            { model: defaultModel },
+            targetAgent.runtimeConfig,
+            forwardedProps.config
+          );
+
+          const title =
+            forwardedProps.title?.trim() ||
+            (await summarizeConversationTitle({
+              config: mergedConfig,
+              prompt,
+            }));
+
+          // Save user turn under the target agent (orchestrator has no own sessions)
+          const userThread = await saveChatTurn(workspace, {
+            agentId: targetAgent.id,
+            sender: "user",
+            bodyMarkdown: prompt,
+            title,
+            runtimeConfig: mergedConfig,
+          });
+
+          const enabledSkills = await loadAgentSkills(
+            workspace,
+            targetAgent.id,
+            mergedConfig.disabledSkills
+          );
+          const tools = buildRuntimeTools({
+            enabledSkills,
+            extraTools: input.tools,
+          });
+
+          const loopResult = await runChatLoop({
+            agentId: targetAgent.id,
+            agentKind: targetAgent.kind,
+            agentPrompt: targetAgent.combinedPrompt,
+            config: mergedConfig,
+            conversationTurns: userThread.turns,
+            enabledSkills,
+            tools,
+            sessionId: userThread.sessionId,
+            executeToolCall: (call) =>
+              executeRuntimeToolCall(call, { enabledSkills }),
+            emitEvent: (event) => agUiStream.apply(event),
+          });
+
+          // Persist response under target agent; orchestrator remains sessionless
+          try {
+            const completedThread = await saveChatTurn(workspace, {
+              agentId: targetAgent.id,
+              sender: "assistant",
+              bodyMarkdown: loopResult.assistantText,
+              thinkingMarkdown: loopResult.thinkingText,
+              title: userThread.title,
+              sessionId: userThread.sessionId,
+              runtimeConfig: mergedConfig,
+              summary: summarizeThread(loopResult.assistantText),
+            });
+            const llmStatsWithRate = {
+              ...loopResult.llmStats,
+              ...(loopResult.llmStats.outputTokens > 0 &&
+              loopResult.llmStats.durationMs > 0
+                ? {
+                    tokensPerSecond: Number(
+                      (
+                        (loopResult.llmStats.outputTokens /
+                          loopResult.llmStats.durationMs) *
+                        1000
+                      ).toFixed(2)
+                    ),
+                  }
+                : {}),
+            };
+            await recordSessionLlmUsage(
+              workspace,
+              targetAgent.id,
+              completedThread.sessionId,
+              llmStatsWithRate
+            );
+          } catch (error) {
+            if (isSessionPersistenceCancelledError(error)) {
+              await pendingWrite;
+              await agUiStream.fail(
+                "Session was deleted before the response could be saved."
+              );
+              return;
+            }
+            throw error;
+          }
+
+          await agUiStream.finish();
+          await pendingWrite;
+        } catch (error) {
+          await agUiStream.fail(
+            error instanceof Error
+              ? error.message
+              : "Orchestrator routing error."
+          );
+          await pendingWrite;
+        }
+      });
+    }
+    // ------------------------------------------------------------------
     const agent = await getAgentById(workspace, agentId);
     if (!agent) {
       return context.json({ error: "Agent not found." }, 404);

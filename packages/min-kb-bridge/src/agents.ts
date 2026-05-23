@@ -211,9 +211,11 @@ export function composeAgentPrompt(input: {
 function normalizeAgentKind(
   metadata: Record<string, unknown>
 ): AgentSummary["kind"] {
-  return resolveConfiguredAgentKind(metadata) === "planner"
-    ? "planner"
-    : "chat";
+  const kind = resolveConfiguredAgentKind(metadata);
+  if (kind === "planner" || kind === "orchestrator") {
+    return kind;
+  }
+  return "chat";
 }
 
 function parseDelegatedAgentIds(metadata: Record<string, unknown>): string[] {
