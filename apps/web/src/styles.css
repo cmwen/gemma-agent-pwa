@@ -762,6 +762,11 @@ kbd {
   font-size: 0.78rem;
 }
 
+.message-copy-button {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+}
+
 .message-card p {
   margin: 0.6rem 0;
 }

@@ -26,6 +26,10 @@ packages/
   min-kb-bridge/  Filesystem adapter for min-kb-store
 ```
 
+## Architecture docs
+
+- [docs/architecture.md](docs/architecture.md) — comprehensive build, module, model, thinking-loop, and delegation documentation.
+
 ## Requirements
 
 - Node 22+

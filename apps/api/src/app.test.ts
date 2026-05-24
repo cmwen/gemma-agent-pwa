@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   deleteSession: vi.fn(),
   getAgentById: vi.fn(),
+  getProviderModelCatalog: vi.fn(),
   getSession: vi.fn(),
   listAgents: vi.fn(),
   listAvailableModels: vi.fn(),
@@ -53,7 +54,7 @@ vi.mock("./chat-loop.js", () => ({
 }));
 
 vi.mock("./llm-provider.js", () => ({
-  getProviderModelCatalog: vi.fn(),
+  getProviderModelCatalog: mocks.getProviderModelCatalog,
   listAvailableModels: mocks.listAvailableModels,
   streamProviderChat: mocks.streamProviderChat,
 }));
@@ -91,6 +92,10 @@ beforeEach(() => {
       isGemma: true,
     },
   ]);
+  mocks.getProviderModelCatalog.mockResolvedValue({
+    models: [],
+    reachable: false,
+  });
   mocks.streamProviderChat.mockResolvedValue({
     assistantText: "Release planning",
     llmStats: {
@@ -177,6 +182,57 @@ describe("app helpers", () => {
 });
 
 describe("createApiApp chat route", () => {
+  it("treats speech as reachable when min-speech-service responds with health details", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          provider: "openai-compatible",
+          upstreamOk: false,
+          upstreamBaseUrl: "http://127.0.0.1:8000/v1",
+          sttModel: "Systran/faster-distil-whisper-small.en",
+          ttsModel: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+          defaultVoice: "af_heart",
+          nlpModel: "gemma-4-e4b",
+          nlpUpstreamOk: false,
+          nlpUpstreamBaseUrl: "http://127.0.0.1:1234/v1",
+          detail:
+            'Configured LM Studio model "gemma-4-e4b" is not loaded. Load it in LM Studio or point NLP_MODEL at an available model.',
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        }
+      )
+    );
+    mocks.summarizeWorkspace.mockResolvedValue({
+      id: "default",
+      storeRoot: workspace.storeRoot,
+      copilotConfigDir: workspace.copilotConfigDir,
+      storeSkillDirectory: workspace.skillsRoot,
+      copilotSkillDirectory: workspace.copilotSkillsRoot,
+      agentCount: 1,
+    });
+    const app = createApiApp(workspaces);
+
+    const response = await app.request("/api/health");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      speechReachable: true,
+      speechIssue:
+        'Configured LM Studio model "gemma-4-e4b" is not loaded. Load it in LM Studio or point NLP_MODEL at an available model.',
+      speech: {
+        ok: false,
+        nlpUpstreamOk: false,
+      },
+    });
+    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:8790/health");
+    fetchMock.mockRestore();
+  });
+
   it("proxies speech NPL processing through the local API", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

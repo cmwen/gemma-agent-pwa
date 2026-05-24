@@ -3982,6 +3982,12 @@ export const MessageCard = memo(function MessageCard(props: {
   turn: ChatTurn;
   streaming?: boolean;
 }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
+    "idle"
+  );
+  const copyStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
   const hasBody = props.turn.bodyMarkdown.trim().length > 0;
   const label =
     props.turn.sender === "user"
@@ -3989,6 +3995,42 @@ export const MessageCard = memo(function MessageCard(props: {
       : props.turn.sender === "tool"
         ? "Skill"
         : "Assistant";
+  const copyActionLabel =
+    props.turn.sender === "user"
+      ? "request"
+      : props.turn.sender === "assistant"
+        ? "response"
+        : undefined;
+  const canCopy = hasBody && Boolean(copyActionLabel) && !props.streaming;
+
+  useEffect(() => {
+    return () => {
+      if (copyStateTimeoutRef.current) {
+        clearTimeout(copyStateTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  async function handleCopy() {
+    if (!canCopy) {
+      return;
+    }
+
+    try {
+      await copyTextToClipboard(props.turn.bodyMarkdown);
+      setCopyState("copied");
+    } catch {
+      setCopyState("error");
+    }
+
+    if (copyStateTimeoutRef.current) {
+      clearTimeout(copyStateTimeoutRef.current);
+    }
+    copyStateTimeoutRef.current = setTimeout(() => {
+      setCopyState("idle");
+      copyStateTimeoutRef.current = null;
+    }, 1800);
+  }
 
   return (
     <article
@@ -4003,6 +4045,22 @@ export const MessageCard = memo(function MessageCard(props: {
       <div className="message-header">
         <strong>{label}</strong>
         <div className="message-header-actions">
+          {canCopy && copyActionLabel ? (
+            <button
+              aria-label={`Copy ${copyActionLabel}`}
+              className="ghost-button message-copy-button"
+              onClick={() => {
+                void handleCopy();
+              }}
+              type="button"
+            >
+              {copyState === "copied"
+                ? "Copied"
+                : copyState === "error"
+                  ? "Copy failed"
+                  : `Copy ${copyActionLabel}`}
+            </button>
+          ) : null}
           {props.onPlaySpeech &&
           props.turn.sender === "assistant" &&
           hasBody &&
@@ -4142,6 +4200,46 @@ function buildRecordingFilename(contentType: string): string {
       ? "webm"
       : "wav";
   return `recording.${extension}`;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === "undefined" || !document.body) {
+    throw new Error("Clipboard API is unavailable in this environment.");
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+  textArea.setAttribute("readonly", "true");
+  textArea.style.position = "fixed";
+  textArea.style.opacity = "0";
+  textArea.style.pointerEvents = "none";
+  document.body.append(textArea);
+
+  const selection = document.getSelection();
+  const priorRange =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+  textArea.focus();
+  textArea.select();
+  textArea.setSelectionRange(0, textArea.value.length);
+  const copied = document.execCommand("copy");
+  textArea.remove();
+
+  if (selection) {
+    selection.removeAllRanges();
+    if (priorRange) {
+      selection.addRange(priorRange);
+    }
+  }
+
+  if (!copied) {
+    throw new Error("Copy command failed.");
+  }
 }
 
 export function buildNextDraftFromTranscript(

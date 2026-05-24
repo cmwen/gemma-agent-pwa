@@ -243,6 +243,40 @@ describe("MessageCard", () => {
     expect(html).toContain("E=mc");
   });
 
+  it("renders a copy request action for user turns", () => {
+    const turn: ChatTurn = {
+      messageId: "turn-user",
+      sender: "user",
+      createdAt: "2026-05-03T12:01:00.000Z",
+      bodyMarkdown: "Please summarize this release thread.",
+      relativePath: "sessions/session-1/turn-user.md",
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(MessageCard, {
+        turn,
+      })
+    );
+
+    expect(html).toContain("Copy request");
+  });
+
+  it("renders a copy response action for assistant turns", () => {
+    const turn: ChatTurn = {
+      messageId: "turn-assistant",
+      sender: "assistant",
+      createdAt: "2026-05-03T12:02:00.000Z",
+      bodyMarkdown: "Here is the release summary.",
+      relativePath: "sessions/session-1/turn-assistant.md",
+    };
+    const html = renderToStaticMarkup(
+      React.createElement(MessageCard, {
+        turn,
+      })
+    );
+
+    expect(html).toContain("Copy response");
+  });
+
   it("renders a reply playback button for assistant turns when speech is enabled", () => {
     const turn: ChatTurn = {
       messageId: "turn-2",
