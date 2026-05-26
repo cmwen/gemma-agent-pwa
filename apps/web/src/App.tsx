@@ -31,6 +31,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { useRegisterSW } from "virtual:pwa-register/react";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
@@ -213,6 +214,11 @@ export default function App() {
     (state) => state.setSelectedWorkspaceId
   );
 
+  const {
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW();
+
   const [runtimeConfig, setRuntimeConfig] = useState<PartialChatRuntimeConfig>(
     {}
   );
@@ -275,8 +281,8 @@ export default function App() {
   const modelDetailsToggleRef = useRef<HTMLButtonElement | null>(null);
   const presetSelectRef = useRef<HTMLSelectElement | null>(null);
   const commandPaletteInputRef = useRef<HTMLInputElement | null>(null);
-  const helpCloseButtonRef = useRef<HTMLButtonElement | null>(null);
-  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+  const commandPaletteDialogRef = useRef<HTMLDialogElement | null>(null);
+  const helpDialogRef = useRef<HTMLDialogElement | null>(null);
   const activeResizePanelRef = useRef<ResizablePanel | null>(null);
   const pendingResizeAnimationFrameRef = useRef<number | undefined>(undefined);
   const pendingResizePointerOffsetRef = useRef<number | undefined>(undefined);
@@ -1165,10 +1171,6 @@ export default function App() {
     [stopSpeechPlayback, stopVoiceActivityMonitor]
   );
   const openCommandPalette = useCallback(() => {
-    lastFocusedElementRef.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
     setHelpOpen(false);
     setCommandQuery("");
     setCommandPaletteOpen(true);
@@ -1180,28 +1182,16 @@ export default function App() {
       if (options?.restoreFocus === false) {
         return;
       }
-      requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
     },
     []
   );
   const openHelpDialog = useCallback(() => {
-    lastFocusedElementRef.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
     setCommandPaletteOpen(false);
     setHelpOpen(true);
   }, []);
-  const closeHelpDialog = useCallback(
-    (options?: { restoreFocus?: boolean }) => {
-      setHelpOpen(false);
-      if (options?.restoreFocus === false) {
-        return;
-      }
-      requestAnimationFrame(() => lastFocusedElementRef.current?.focus());
-    },
-    []
-  );
+  const closeHelpDialog = useCallback(() => {
+    setHelpOpen(false);
+  }, []);
   const commandItems: CommandItem[] = [
     {
       id: "jump-chat",
@@ -1538,17 +1528,26 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    if (!isCommandPaletteOpen) {
-      return;
+    const dialog = commandPaletteDialogRef.current;
+    if (!dialog) return;
+    if (isCommandPaletteOpen) {
+      if (!dialog.open) dialog.showModal();
+      requestAnimationFrame(() => {
+        commandPaletteInputRef.current?.focus();
+      });
+    } else {
+      if (dialog.open) dialog.close();
     }
-    requestAnimationFrame(() => commandPaletteInputRef.current?.focus());
   }, [isCommandPaletteOpen]);
 
   useEffect(() => {
-    if (!isHelpOpen) {
-      return;
+    const dialog = helpDialogRef.current;
+    if (!dialog) return;
+    if (isHelpOpen) {
+      if (!dialog.open) dialog.showModal();
+    } else {
+      if (dialog.open) dialog.close();
     }
-    requestAnimationFrame(() => helpCloseButtonRef.current?.focus());
   }, [isHelpOpen]);
 
   useEffect(() => {
@@ -2042,7 +2041,7 @@ export default function App() {
   }
 
   function handleCommandSelection(command: CommandItem) {
-    closeCommandPalette({ restoreFocus: false });
+    closeCommandPalette();
     command.run();
   }
 
@@ -2139,16 +2138,6 @@ export default function App() {
         } else {
           openCommandPalette();
         }
-        return;
-      }
-      if (event.key === "Escape" && isCommandPaletteOpen) {
-        event.preventDefault();
-        closeCommandPalette();
-        return;
-      }
-      if (event.key === "Escape" && isHelpOpen) {
-        event.preventDefault();
-        closeHelpDialog();
         return;
       }
       if (isEditableElement(event.target)) {
@@ -2537,6 +2526,26 @@ export default function App() {
       ref={appShellRef}
       style={desktopShellStyle}
     >
+      {needRefresh && (
+        <div className="pwa-update-banner" role="status">
+          <span>A new version is available.</span>
+          <button
+            className="ghost-button"
+            onClick={() => updateServiceWorker(true)}
+            type="button"
+          >
+            Update now
+          </button>
+          <button
+            aria-label="Dismiss update notification"
+            className="icon-button"
+            onClick={() => setNeedRefresh(false)}
+            type="button"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="app-toolbar">
         <div className="toolbar-brand">
           <span className="toolbar-brand-title">Gemma Agent PWA</span>
@@ -3787,189 +3796,195 @@ export default function App() {
           </div>
         </aside>
       ) : null}
-      {isHelpOpen ? (
-        <div className="dialog-overlay">
-          <section
-            aria-labelledby="help-dialog-title"
-            aria-modal="true"
-            className="help-dialog"
-            onMouseDown={(event) => event.stopPropagation()}
-            role="dialog"
-          >
-            <div className="help-dialog-header">
-              <div>
-                <p className="eyebrow">Help</p>
-                <h2 id="help-dialog-title">Shortcuts and quick tips</h2>
-              </div>
-              <button
-                className="ghost-button"
-                onClick={() => closeHelpDialog()}
-                ref={helpCloseButtonRef}
-                type="button"
-              >
-                Close <kbd>Esc</kbd>
-              </button>
+      <dialog
+        aria-labelledby="help-dialog-title"
+        className="help-dialog"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeHelpDialog();
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeHelpDialog();
+        }}
+        ref={helpDialogRef}
+      >
+        <section className="help-dialog-inner">
+          <div className="help-dialog-header">
+            <div>
+              <p className="eyebrow">Help</p>
+              <h2 id="help-dialog-title">Shortcuts and quick tips</h2>
             </div>
-            <div className="help-dialog-content">
-              <section className="help-dialog-section">
-                <h3>Keyboard shortcuts</h3>
-                <dl className="shortcut-list">
-                  <div>
-                    <dt>
-                      <kbd>Ctrl/Cmd+K</kbd>
-                    </dt>
-                    <dd>Open quick actions.</dd>
-                  </div>
-                  <div>
-                    <dt>
-                      <kbd>/</kbd>
-                    </dt>
-                    <dd>Jump to the composer.</dd>
-                  </div>
-                  <div>
-                    <dt>
-                      <kbd>Alt+1-4</kbd>
-                    </dt>
-                    <dd>Move between chat, agents, history, and details.</dd>
-                  </div>
-                  <div>
-                    <dt>
-                      <kbd>N</kbd>
-                    </dt>
-                    <dd>Start a new chat for the selected agent.</dd>
-                  </div>
-                  <div>
-                    <dt>
-                      <kbd>?</kbd>
-                    </dt>
-                    <dd>Open this help sheet.</dd>
-                  </div>
-                </dl>
-              </section>
-              <section className="help-dialog-section">
-                <h3>Quick tips</h3>
-                <ul className="help-list">
-                  <li>
-                    Drag the handles beside Agents and History on desktop.
-                  </li>
-                  <li>
-                    Fast and Think only change reasoning mode; the preset stays
-                    in place.
-                  </li>
-                  <li>
-                    Details holds model settings and the live tool-call console.
-                  </li>
-                  <li>
-                    Move chats to Trash first, then restore or delete them
-                    forever later.
-                  </li>
-                </ul>
-              </section>
-            </div>
-          </section>
-        </div>
-      ) : null}
-      {isCommandPaletteOpen ? (
-        <div className="command-palette-overlay">
-          <section
-            aria-labelledby="command-palette-title"
-            aria-modal="true"
-            className="command-palette"
-            onMouseDown={(event) => event.stopPropagation()}
-            role="dialog"
-          >
-            <div className="command-palette-header">
-              <div>
-                <p className="eyebrow">Command palette</p>
-                <h2 id="command-palette-title">Quick actions</h2>
-              </div>
-              <button
-                className="ghost-button"
-                onClick={() => closeCommandPalette()}
-                type="button"
-              >
-                Close <kbd>Esc</kbd>
-              </button>
-            </div>
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                const firstCommand = visibleCommandItems[0];
-                if (!firstCommand) {
-                  return;
-                }
-                handleCommandSelection(firstCommand);
-              }}
+            <button
+              className="ghost-button"
+              onClick={() => closeHelpDialog()}
+              type="button"
             >
-              <input
-                aria-label="Search commands"
-                aria-activedescendant={
-                  selectedCommand
-                    ? `command-item-${selectedCommand.id}`
-                    : undefined
-                }
-                className="command-palette-search"
-                onChange={(event) => setCommandQuery(event.target.value)}
-                onKeyDown={handleCommandPaletteKeyDown}
-                placeholder="Type a command or jump to a panel..."
-                ref={commandPaletteInputRef}
-                value={commandQuery}
-              />
-            </form>
-            <div className="command-palette-list">
-              {groupedCommandItems.length > 0 ? (
-                groupedCommandItems.map(([group, commands]) => (
-                  <div className="command-palette-group" key={group}>
-                    <p className="command-palette-group-label">{group}</p>
-                    {commands.map((command) => (
-                      <button
-                        className={`command-item ${
-                          selectedCommand?.id === command.id
-                            ? "is-selected"
-                            : ""
-                        }`}
-                        id={`command-item-${command.id}`}
-                        key={command.id}
-                        onMouseEnter={() =>
-                          setCommandSelectionIndex(
-                            visibleCommandItems.findIndex(
-                              (visibleCommand) =>
-                                visibleCommand.id === command.id
-                            )
+              Close <kbd>Esc</kbd>
+            </button>
+          </div>
+          <div className="help-dialog-content">
+            <section className="help-dialog-section">
+              <h3>Keyboard shortcuts</h3>
+              <dl className="shortcut-list">
+                <div>
+                  <dt>
+                    <kbd>Ctrl/Cmd+K</kbd>
+                  </dt>
+                  <dd>Open quick actions.</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>/</kbd>
+                  </dt>
+                  <dd>Jump to the composer.</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>Alt+1-4</kbd>
+                  </dt>
+                  <dd>Move between chat, agents, history, and details.</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>N</kbd>
+                  </dt>
+                  <dd>Start a new chat for the selected agent.</dd>
+                </div>
+                <div>
+                  <dt>
+                    <kbd>?</kbd>
+                  </dt>
+                  <dd>Open this help sheet.</dd>
+                </div>
+              </dl>
+            </section>
+            <section className="help-dialog-section">
+              <h3>Quick tips</h3>
+              <ul className="help-list">
+                <li>
+                  Drag the handles beside Agents and History on desktop.
+                </li>
+                <li>
+                  Fast and Think only change reasoning mode; the preset stays
+                  in place.
+                </li>
+                <li>
+                  Details holds model settings and the live tool-call console.
+                </li>
+                <li>
+                  Move chats to Trash first, then restore or delete them
+                  forever later.
+                </li>
+              </ul>
+            </section>
+          </div>
+        </section>
+      </dialog>
+      <dialog
+        aria-labelledby="command-palette-title"
+        className="command-palette-dialog"
+        onCancel={(event) => {
+          event.preventDefault();
+          closeCommandPalette();
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeCommandPalette();
+        }}
+        ref={commandPaletteDialogRef}
+      >
+        <section className="command-palette">
+          <div className="command-palette-header">
+            <div>
+              <p className="eyebrow">Command palette</p>
+              <h2 id="command-palette-title">Quick actions</h2>
+            </div>
+            <button
+              className="ghost-button"
+              onClick={() => closeCommandPalette()}
+              type="button"
+            >
+              Close <kbd>Esc</kbd>
+            </button>
+          </div>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              const firstCommand = visibleCommandItems[0];
+              if (!firstCommand) {
+                return;
+              }
+              handleCommandSelection(firstCommand);
+            }}
+          >
+            <input
+              aria-label="Search commands"
+              aria-activedescendant={
+                selectedCommand
+                  ? `command-item-${selectedCommand.id}`
+                  : undefined
+              }
+              autoFocus
+              className="command-palette-search"
+              onChange={(event) => setCommandQuery(event.target.value)}
+              onKeyDown={handleCommandPaletteKeyDown}
+              placeholder="Type a command or jump to a panel..."
+              ref={commandPaletteInputRef}
+              value={commandQuery}
+            />
+          </form>
+          <div className="command-palette-list">
+            {groupedCommandItems.length > 0 ? (
+              groupedCommandItems.map(([group, commands]) => (
+                <div className="command-palette-group" key={group}>
+                  <p className="command-palette-group-label">{group}</p>
+                  {commands.map((command) => (
+                    <button
+                      className={`command-item ${
+                        selectedCommand?.id === command.id
+                          ? "is-selected"
+                          : ""
+                      }`}
+                      id={`command-item-${command.id}`}
+                      key={command.id}
+                      onMouseEnter={() =>
+                        setCommandSelectionIndex(
+                          visibleCommandItems.findIndex(
+                            (visibleCommand) =>
+                              visibleCommand.id === command.id
                           )
-                        }
-                        onClick={() => handleCommandSelection(command)}
-                        type="button"
-                      >
-                        <span className="command-item-copy">
-                          <strong>{command.label}</strong>
-                          <span>{command.description}</span>
-                        </span>
-                        {command.shortcut ? (
-                          <kbd>{command.shortcut}</kbd>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                ))
-              ) : (
-                <p className="command-item-empty">
-                  No commands match that search.
-                </p>
-              )}
-            </div>
-            <div className="command-palette-footer">
-              <span>
-                {visibleCommandItems.length} command
-                {visibleCommandItems.length === 1 ? "" : "s"}
-              </span>
-              <span>
-                <kbd>↑</kbd>/<kbd>↓</kbd> navigate · <kbd>Enter</kbd> run
-              </span>
-            </div>
-          </section>
-        </div>
-      ) : null}
+                        )
+                      }
+                      onClick={() => handleCommandSelection(command)}
+                      type="button"
+                    >
+                      <span className="command-item-copy">
+                        <strong>{command.label}</strong>
+                        <span>{command.description}</span>
+                      </span>
+                      {command.shortcut ? (
+                        <kbd>{command.shortcut}</kbd>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
+              ))
+            ) : (
+              <p className="command-item-empty">
+                No commands match that search.
+              </p>
+            )}
+          </div>
+          <div className="command-palette-footer">
+            <span>
+              {visibleCommandItems.length} command
+              {visibleCommandItems.length === 1 ? "" : "s"}
+            </span>
+            <span>
+              <kbd>↑</kbd>/<kbd>↓</kbd> navigate · <kbd>Enter</kbd> run
+            </span>
+          </div>
+        </section>
+      </dialog>
     </div>
   );
 }

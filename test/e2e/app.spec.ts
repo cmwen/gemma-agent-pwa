@@ -16,17 +16,19 @@ function getTranslateX(transform: string) {
   return Number(values[1] ? entries[12] : (entries[4] ?? 0));
 }
 
-test.describe.configure({ mode: "serial" });
+test.describe("mobile workflows", () => {
+  test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async ({ page, request }) => {
-  await request.post(`${mockApiBaseUrl}/api/test/reset`);
-  await page.goto("/");
-  await page.evaluate(() => {
-    window.localStorage.clear();
-    window.sessionStorage.clear();
+  test.beforeEach(async ({ page, request, isMobile }) => {
+    test.skip(!isMobile, "Mobile-only tests");
+    await request.post(`${mockApiBaseUrl}/api/test/reset`);
+    await page.goto("/");
+    await page.evaluate(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+    await page.reload();
   });
-  await page.reload();
-});
 
 test("streams quick replies cleanly on mobile without horizontal overflow", async ({
   page,
@@ -34,8 +36,8 @@ test("streams quick replies cleanly on mobile without horizontal overflow", asyn
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Release planner" })
-  ).toBeVisible();
+    page.locator(".chat-header-agent .eyebrow")
+  ).toHaveText("Release planner");
   await expect(
     page.locator(".mobile-nav").getByRole("button", { name: "Chat" })
   ).toBeVisible();
@@ -205,6 +207,9 @@ test("keeps the mobile chat header visible while scrolling on mobile", async ({
       "long mobile scroll",
     ].join("\n")
   );
+  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled({
+    timeout: 10000,
+  });
   await page.getByRole("button", { name: "Send" }).click();
 
   const timeline = page.locator(".timeline");
@@ -437,7 +442,7 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("dialog", { name: "Shortcuts and quick tips" })
-  ).toHaveCount(0);
+  ).not.toBeVisible();
 
   const initialTheme = await page.evaluate(
     () => document.documentElement.dataset.theme
@@ -468,9 +473,7 @@ test("persists theme changes and supports keyboard shortcuts on mobile", async (
     page.getByRole("dialog", { name: "Quick actions" })
   ).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Quick actions" })).toHaveCount(
-    0
-  );
+  await expect(page.getByRole("dialog", { name: "Quick actions" })).not.toBeVisible();
 
   await page.getByRole("button", { name: "Show details" }).click();
   await expect(
@@ -560,4 +563,101 @@ test("hides the details panel when closed and supports moving chat history to Tr
       .locator("#app-section-history")
       .getByText("Start a new thread for this agent to create local history.")
   ).toBeVisible();
+});
+}); // end mobile workflows
+
+test.describe("desktop layout and keyboard shortcuts", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  test.beforeEach(async ({ page, request, isMobile }) => {
+    test.skip(isMobile, "Desktop-only tests");
+    await request.post(`http://127.0.0.1:56012/api/test/reset`);
+    await page.goto("/");
+    await page.evaluate(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
+    await page.reload();
+    await page.bringToFront();
+    await expect(page.locator(".app-toolbar")).toBeVisible();
+  });
+
+  test("shows all panels side-by-side on desktop", async ({ page }) => {
+    await expect(page.locator(".app-toolbar")).toBeVisible();
+    await expect(page.locator("#app-section-agents")).toBeVisible();
+    await expect(page.locator("#app-section-history")).toBeVisible();
+    await expect(page.locator("#app-section-chat")).toBeVisible();
+    await expect(page.locator(".mobile-top-chrome")).not.toBeVisible();
+  });
+
+  test("opens and closes the command palette with keyboard on desktop", async ({
+    page,
+  }) => {
+    await page.locator(".toolbar-brand").click();
+    await page.keyboard.press("Control+K");
+    await expect(
+      page.getByRole("dialog", { name: "Quick actions" })
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            document.activeElement?.getAttribute("aria-label") ===
+            "Search commands"
+        )
+      )
+      .toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Quick actions" })
+    ).not.toBeVisible();
+  });
+
+  test("opens and closes the help dialog on desktop", async ({ page }) => {
+    await page.locator(".toolbar-brand").click();
+    await page.keyboard.press("?");
+    await expect(
+      page.getByRole("dialog", { name: "Shortcuts and quick tips" })
+    ).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(
+      page.getByRole("dialog", { name: "Shortcuts and quick tips" })
+    ).not.toBeVisible();
+  });
+
+  test("shows and hides the details panel on desktop", async ({ page }) => {
+    await expect(page.locator("#app-section-details")).not.toBeAttached();
+
+    await page.getByRole("button", { name: "Show details" }).click();
+    await expect(page.locator("#app-section-details")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Model details" })
+    ).toBeVisible();
+
+    await page
+      .locator("#app-section-details")
+      .getByRole("button", { name: "Hide details" })
+      .click();
+    await expect(page.locator("#app-section-details")).not.toBeAttached();
+  });
+
+  test("streams a chat reply on desktop without horizontal overflow", async ({
+    page,
+  }) => {
+    const composer = page.getByRole("textbox", { name: "Message composer" });
+    await composer.fill("Summarize the desktop release plan.");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const chatPanel = page.getByRole("main");
+    await expect(
+      chatPanel.getByText("Streaming reply for google/gemma-4b-it")
+    ).toBeVisible();
+
+    const overflowWidth = await page.evaluate(
+      () => document.documentElement.scrollWidth - window.innerWidth
+    );
+    expect(overflowWidth).toBeLessThanOrEqual(1);
+  });
 });

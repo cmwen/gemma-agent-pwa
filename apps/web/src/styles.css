@@ -118,6 +118,29 @@ summary:focus-visible {
   transition: grid-template-columns 180ms ease;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .app-shell {
+    transition: none;
+  }
+}
+
+.pwa-update-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 1rem;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.pwa-update-banner span {
+  flex: 1;
+}
+
 .app-toolbar {
   grid-column: 1 / -1;
   display: grid;
@@ -281,6 +304,12 @@ kbd {
 
 .detail-panel-visible {
   animation: detail-panel-enter 180ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-panel-visible {
+    animation: none;
+  }
 }
 
 .agent-list,
@@ -1216,20 +1245,76 @@ kbd {
   margin: 0 1.25rem 0.75rem;
 }
 
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 19;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  background: rgba(2, 6, 23, 0.64);
-  backdrop-filter: blur(12px);
+.dialog-overlay,
+.command-palette-overlay {
+  display: none;
 }
 
+/* ─── Native <dialog> shared styles ─────────────────────────────────────── */
+
+dialog {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  max-width: 100vw;
+  max-height: 100dvh;
+  opacity: 0;
+  transform: scale(0.97) translateY(-8px);
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    overlay 180ms allow-discrete,
+    display 180ms allow-discrete;
+}
+
+dialog[open] {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+@starting-style {
+  dialog[open] {
+    opacity: 0;
+    transform: scale(0.97) translateY(-8px);
+  }
+}
+
+dialog::backdrop {
+  background: rgba(2, 6, 23, 0.64);
+  backdrop-filter: blur(12px);
+  opacity: 0;
+  transition:
+    opacity 180ms ease,
+    overlay 180ms allow-discrete,
+    display 180ms allow-discrete;
+}
+
+dialog[open]::backdrop {
+  opacity: 1;
+}
+
+@starting-style {
+  dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog,
+  dialog::backdrop {
+    transition: none;
+  }
+}
+
+/* ─── Help dialog ────────────────────────────────────────────────────────── */
+
 .help-dialog {
-  width: min(36rem, 100%);
+  margin: auto;
+  width: min(36rem, calc(100vw - 2rem));
+}
+
+.help-dialog-inner {
   overflow: hidden;
   border: 1px solid var(--surface-border);
   border-radius: 1.4rem;
@@ -1293,20 +1378,15 @@ kbd {
   margin-top: 0.55rem;
 }
 
-.command-palette-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: min(12vh, 6rem) 1rem 1rem;
-  background: rgba(2, 6, 23, 0.64);
-  backdrop-filter: blur(12px);
+/* ─── Command palette dialog ─────────────────────────────────────────────── */
+
+.command-palette-dialog {
+  margin-top: min(12vh, 6rem);
+  margin-bottom: auto;
+  width: min(42rem, calc(100vw - 2rem));
 }
 
 .command-palette {
-  width: min(42rem, 100%);
   max-height: min(72vh, 42rem);
   overflow: hidden;
   border: 1px solid var(--surface-border);
