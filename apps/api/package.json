@@ -14,7 +14,7 @@
     "@ag-ui/encoder": "^0.0.53",
     "@gemma-agent-pwa/contracts": "workspace:*",
     "@gemma-agent-pwa/min-kb-bridge": "workspace:*",
-    "@hono/node-server": "^2.0.1",
-    "hono": "^4.12.17"
+    "@hono/node-server": "^2.0.4",
+    "hono": "^4.12.23"
   }
 }
