@@ -727,6 +727,49 @@ export async function executeSkillScript(
     }
   }
 
+  if (shouldRetryWithActionPositionalArgs(firstResult, structuredInput)) {
+    const actionPositionalArgs = structuredInput.actionPositionalArgs;
+    if (actionPositionalArgs) {
+      logSkillProcessDebug({
+        skillName: skill.name,
+        phase: "retrying-positional",
+        command,
+        args: [...args, ...actionPositionalArgs],
+        cwd: scriptDir,
+        rawInput: input,
+        envKeys: Object.keys(structuredInput.env),
+      });
+      const retriedResult = await runSkillProcess({
+        command,
+        args: [...args, ...actionPositionalArgs],
+        cwd: scriptDir,
+        env: baseEnvironment,
+        stdin: input,
+        skillName: skill.name,
+        timeoutMs,
+      });
+      if (
+        retriedResult.exitCode !== 0 ||
+        retriedResult.errorMessage ||
+        retriedResult.timedOut
+      ) {
+        logSkillProcessDebug({
+          skillName: skill.name,
+          phase: "retry-failed",
+          command,
+          args: [...args, ...actionPositionalArgs],
+          cwd: scriptDir,
+          rawInput: input,
+          envKeys: Object.keys(structuredInput.env),
+          result: retriedResult,
+        });
+      }
+      if (retriedResult.exitCode === 0) {
+        return formatSkillProcessResult(skill.name, retriedResult);
+      }
+    }
+  }
+
   return formatSkillProcessResult(skill.name, firstResult);
 }
 
@@ -752,10 +795,27 @@ function buildStructuredSkillInput(input: string): {
   args: string[];
   env: Record<string, string>;
   singleValuePositionalArg?: string;
+  actionPositionalArgs?: string[];
 } {
   const trimmed = input.trim();
   if (!trimmed) {
     return { args: [], env: {} };
+  }
+
+  const parsed = tryParseJson(trimmed);
+  if (isJsonObject(parsed)) {
+    const singleValuePositionalArg = extractSingleValuePositionalArg(parsed);
+    const actionPositionalArgs = extractActionPositionalArgs(parsed);
+    return {
+      args: buildCliArgsFromObject(parsed),
+      env: {
+        [SKILL_INPUT_JSON_ENV_KEY]: JSON.stringify(parsed),
+      },
+      ...(singleValuePositionalArg !== undefined
+        ? { singleValuePositionalArg }
+        : {}),
+      ...(actionPositionalArgs !== undefined ? { actionPositionalArgs } : {}),
+    };
   }
 
   const cliArgs = parseCliInputArgs(trimmed);
@@ -763,21 +823,7 @@ function buildStructuredSkillInput(input: string): {
     return { args: cliArgs, env: {} };
   }
 
-  const parsed = tryParseJson(trimmed);
-  if (!isJsonObject(parsed)) {
-    return { args: [], env: {} };
-  }
-
-  const singleValuePositionalArg = extractSingleValuePositionalArg(parsed);
-  return {
-    args: buildCliArgsFromObject(parsed),
-    env: {
-      [SKILL_INPUT_JSON_ENV_KEY]: JSON.stringify(parsed),
-    },
-    ...(singleValuePositionalArg !== undefined
-      ? { singleValuePositionalArg }
-      : {}),
-  };
+  return { args: [], env: {} };
 }
 
 function buildCliArgsFromObject(input: Record<string, unknown>): string[] {
@@ -847,6 +893,29 @@ function extractSingleValuePositionalArg(
   }
 
   return undefined;
+}
+
+function extractActionPositionalArgs(
+  value: Record<string, unknown>
+): string[] | undefined {
+  const actionValue = value.action;
+  if (typeof actionValue !== "string") {
+    return undefined;
+  }
+
+  const action = actionValue.trim();
+  if (!action) {
+    return undefined;
+  }
+
+  const args: string[] = [action];
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (key === "action") {
+      continue;
+    }
+    appendCliArgsForValue(args, normalizeCliFlagName(key), entryValue);
+  }
+  return args;
 }
 
 function parseCliInputArgs(input: string): string[] {
@@ -950,6 +1019,23 @@ function shouldRetryWithSinglePositionalArg(
       result.exitCode !== 0 &&
       !result.timedOut &&
       /unrecognized arguments:/i.test(result.stderr)
+  );
+}
+
+function shouldRetryWithActionPositionalArgs(
+  result: Pick<SkillProcessResult, "stderr" | "exitCode" | "timedOut">,
+  structuredInput: {
+    args: string[];
+    actionPositionalArgs?: string[];
+  }
+): boolean {
+  return Boolean(
+    structuredInput.args.length > 0 &&
+      structuredInput.actionPositionalArgs &&
+      structuredInput.actionPositionalArgs.length > 0 &&
+      result.exitCode !== 0 &&
+      !result.timedOut &&
+      /(?:unrecognized arguments:|invalid choice:)/i.test(result.stderr)
   );
 }
 
@@ -1177,6 +1263,7 @@ export const __testing = {
   parseLoadSkillToolInput,
   parseCliInputArgs,
   parseSkillCalls,
+  shouldRetryWithActionPositionalArgs,
   shouldRetryWithSinglePositionalArg,
   stripSkillCalls,
   resolveInterpreter,

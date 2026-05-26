@@ -14,6 +14,7 @@ const {
   normalizeLegacyToolCallInput,
   parseLoadSkillToolInput,
   parseCliInputArgs,
+  shouldRetryWithActionPositionalArgs,
   resolveInterpreter,
   shouldRetryWithSinglePositionalArg,
 } = __testing;
@@ -319,6 +320,34 @@ describe("structured skill input helpers", () => {
     });
   });
 
+  it("extracts action-based positional retries from JSON object input", () => {
+    expect(
+      buildStructuredSkillInput(
+        '{"action":"write","name":"git-commit-push.sh","content":"echo \\"--- Starting Git Commit and Push ---\\""}'
+      )
+    ).toEqual({
+      args: [
+        "--action",
+        "write",
+        "--name",
+        "git-commit-push.sh",
+        "--content",
+        'echo "--- Starting Git Commit and Push ---"',
+      ],
+      env: {
+        SKILL_INPUT_JSON:
+          '{"action":"write","name":"git-commit-push.sh","content":"echo \\"--- Starting Git Commit and Push ---\\""}',
+      },
+      actionPositionalArgs: [
+        "write",
+        "--name",
+        "git-commit-push.sh",
+        "--content",
+        'echo "--- Starting Git Commit and Push ---"',
+      ],
+    });
+  });
+
   it("passes through CLI-style flag input as positional args", () => {
     expect(
       buildStructuredSkillInput(
@@ -411,6 +440,36 @@ describe("structured skill input helpers", () => {
         {
           args: ["--query", "TODO"],
           singleValuePositionalArg: "TODO",
+        }
+      )
+    ).toBe(false);
+  });
+
+  it("retries action-based JSON input as command-style positional args after argparse errors", () => {
+    expect(
+      shouldRetryWithActionPositionalArgs(
+        {
+          stderr: "error: argument command: invalid choice: '--action'",
+          exitCode: 2,
+          timedOut: false,
+        },
+        {
+          args: ["--action", "write", "--name", "entry.txt"],
+          actionPositionalArgs: ["write", "--name", "entry.txt"],
+        }
+      )
+    ).toBe(true);
+
+    expect(
+      shouldRetryWithActionPositionalArgs(
+        {
+          stderr: "Error: permission denied",
+          exitCode: 1,
+          timedOut: false,
+        },
+        {
+          args: ["--action", "write", "--name", "entry.txt"],
+          actionPositionalArgs: ["write", "--name", "entry.txt"],
         }
       )
     ).toBe(false);

@@ -339,6 +339,46 @@ describe("agentic skill loop", () => {
     expect(result.output).toBe("query=TODO|scope=all");
   });
 
+  it("retries action-based JSON input as command-style args for argparse subcommands", async () => {
+    const scriptPath = path.join(tmpDir, "run.py");
+    await fs.writeFile(
+      scriptPath,
+      [
+        "import argparse",
+        "",
+        "parser = argparse.ArgumentParser()",
+        'subparsers = parser.add_subparsers(dest="command", required=True)',
+        'write_parser = subparsers.add_parser("write")',
+        'write_parser.add_argument("--name", required=True)',
+        'write_parser.add_argument("--content", required=True)',
+        "args = parser.parse_args()",
+        'print(f"command={args.command}|name={args.name}|content={args.content}")',
+      ].join("\n"),
+      { mode: 0o755 }
+    );
+
+    const skill = {
+      name: "manage-bin-scripts",
+      description: "Manages local bin scripts",
+      scope: "agent-local" as const,
+      path: path.join(tmpDir, "SKILL.md"),
+      sourceRoot: tmpDir,
+      hasScript: true,
+      scriptPath,
+      content: "Writes and executes helper scripts.",
+    };
+
+    const result = await executeSkillScript(
+      skill,
+      '{"action":"write","name":"git-commit-push.sh","content":"echo \\"--- Starting Git Commit and Push ---\\""}'
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe(
+      'command=write|name=git-commit-push.sh|content=echo "--- Starting Git Commit and Push ---"'
+    );
+  });
+
   it("passes unquoted multi-word CLI flag values as a single argument", async () => {
     const scriptPath = path.join(tmpDir, "run.py");
     await fs.writeFile(
