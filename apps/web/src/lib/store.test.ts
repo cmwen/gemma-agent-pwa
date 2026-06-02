@@ -29,10 +29,12 @@ afterEach(() => {
 describe("session selection helpers", () => {
   it("treats a cleared session as an explicit stored selection", () => {
     expect(
-      hasStoredSessionSelection({ "default:agent-1": null }, "default", "agent-1")
-    ).toBe(
-      true
-    );
+      hasStoredSessionSelection(
+        { "default:agent-1": null },
+        "default",
+        "agent-1"
+      )
+    ).toBe(true);
     expect(
       getSelectedSessionId({ "default:agent-1": null }, "default", "agent-1")
     ).toBeUndefined();

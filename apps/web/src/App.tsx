@@ -1,3 +1,4 @@
+import { useRegisterSW } from "virtual:pwa-register/react";
 import {
   type ChatSession,
   type ChatSessionSummary,
@@ -31,7 +32,6 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { useRegisterSW } from "virtual:pwa-register/react";
 import {
   applyPresetRuntimeConfig,
   buildAppShellClassName,
@@ -2181,7 +2181,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleGlobalKeydown);
   }, [
     closeCommandPalette,
-    closeHelpDialog,
     focusComposerFromShortcut,
     focusSection,
     isCommandPaletteOpen,
@@ -2857,7 +2856,8 @@ export default function App() {
                 <p className="eyebrow">Local Gemma chat</p>
               )}
               <h2 className="chat-header-title">
-                {thread?.title ?? (selectedAgent ? "New conversation" : "Choose an agent")}
+                {thread?.title ??
+                  (selectedAgent ? "New conversation" : "Choose an agent")}
               </h2>
               <div className="chat-header-meta">
                 <p className="support-text chat-header-status">
@@ -3803,7 +3803,7 @@ export default function App() {
           event.preventDefault();
           closeHelpDialog();
         }}
-        onClick={(event) => {
+        onPointerDown={(event) => {
           if (event.target === event.currentTarget) closeHelpDialog();
         }}
         ref={helpDialogRef}
@@ -3861,19 +3861,17 @@ export default function App() {
             <section className="help-dialog-section">
               <h3>Quick tips</h3>
               <ul className="help-list">
+                <li>Drag the handles beside Agents and History on desktop.</li>
                 <li>
-                  Drag the handles beside Agents and History on desktop.
-                </li>
-                <li>
-                  Fast and Think only change reasoning mode; the preset stays
-                  in place.
+                  Fast and Think only change reasoning mode; the preset stays in
+                  place.
                 </li>
                 <li>
                   Details holds model settings and the live tool-call console.
                 </li>
                 <li>
-                  Move chats to Trash first, then restore or delete them
-                  forever later.
+                  Move chats to Trash first, then restore or delete them forever
+                  later.
                 </li>
               </ul>
             </section>
@@ -3887,7 +3885,7 @@ export default function App() {
           event.preventDefault();
           closeCommandPalette();
         }}
-        onClick={(event) => {
+        onPointerDown={(event) => {
           if (event.target === event.currentTarget) closeCommandPalette();
         }}
         ref={commandPaletteDialogRef}
@@ -3940,17 +3938,14 @@ export default function App() {
                   {commands.map((command) => (
                     <button
                       className={`command-item ${
-                        selectedCommand?.id === command.id
-                          ? "is-selected"
-                          : ""
+                        selectedCommand?.id === command.id ? "is-selected" : ""
                       }`}
                       id={`command-item-${command.id}`}
                       key={command.id}
                       onMouseEnter={() =>
                         setCommandSelectionIndex(
                           visibleCommandItems.findIndex(
-                            (visibleCommand) =>
-                              visibleCommand.id === command.id
+                            (visibleCommand) => visibleCommand.id === command.id
                           )
                         )
                       }
@@ -3961,9 +3956,7 @@ export default function App() {
                         <strong>{command.label}</strong>
                         <span>{command.description}</span>
                       </span>
-                      {command.shortcut ? (
-                        <kbd>{command.shortcut}</kbd>
-                      ) : null}
+                      {command.shortcut ? <kbd>{command.shortcut}</kbd> : null}
                     </button>
                   ))}
                 </div>

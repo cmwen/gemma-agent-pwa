@@ -111,7 +111,9 @@ export function resolveTestStoreRoot(cwd: string): string | undefined {
   }
 
   const candidateRoot = path.resolve(cwd, "test/min-kb-store");
-  return existsSync(path.join(candidateRoot, "agents")) ? candidateRoot : undefined;
+  return existsSync(path.join(candidateRoot, "agents"))
+    ? candidateRoot
+    : undefined;
 }
 
 function parsePort(value: string | undefined): number | undefined {

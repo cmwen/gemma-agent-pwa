@@ -182,7 +182,7 @@ export interface RoutingResult {
  * matched case-insensitively against candidate IDs and titles. Falls back to
  * the first candidate if the LLM produces an invalid or empty response.
  *
- * This function never throws — LLM errors return a fallback result.
+ * The caller must provide at least one candidate.
  */
 export async function routeToAgent(options: {
   systemPrompt: string;
@@ -213,15 +213,19 @@ export async function routeToAgent(options: {
   const durationMs = Math.max(0, Math.round(performance.now() - startedAt));
   const rawResponse = result?.assistantText?.trim() ?? "";
   const normalizedResponse = rawResponse.toLowerCase();
+  const [firstCandidate] = options.candidates;
+  if (!firstCandidate) {
+    throw new Error("routeToAgent requires at least one candidate.");
+  }
 
   const agent =
     options.candidates.find(
       (a) =>
         a.id.toLowerCase() === normalizedResponse ||
         a.title.toLowerCase() === normalizedResponse
-    ) ?? options.candidates[0];
+    ) ?? firstCandidate;
 
-  return { agent: agent!, rawResponse, durationMs };
+  return { agent, rawResponse, durationMs };
 }
 
 // ---------------------------------------------------------------------------

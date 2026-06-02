@@ -212,7 +212,7 @@ function normalizeAgentKind(
   metadata: Record<string, unknown>
 ): AgentSummary["kind"] {
   const kind = resolveConfiguredAgentKind(metadata);
-  if (kind === "planner" || kind === "orchestrator") {
+  if (kind === "planner") {
     return kind;
   }
   return "chat";

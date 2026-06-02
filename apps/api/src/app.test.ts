@@ -368,6 +368,10 @@ describe("createApiApp chat route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject([
       {
+        id: "_orchestrator",
+        title: "Orchestrator",
+      },
+      {
         id: "release-planner",
         title: "Release Planner",
       },

@@ -1,5 +1,5 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,8 +9,8 @@ import {
   buildApiProxyTarget,
   DEFAULT_DEV_API_BASE_URL,
   findAvailablePort,
-  resolveTestStoreRoot,
   resolvePort,
+  resolveTestStoreRoot,
 } from "../scripts/dev.js";
 
 const servers: net.Server[] = [];
@@ -33,7 +33,9 @@ afterEach(async () => {
   );
   servers.length = 0;
   await Promise.all(
-    tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
+    tempRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true }))
   );
   delete process.env.MIN_KB_TEST_STORE_ROOT;
 });
@@ -85,7 +87,9 @@ describe("dev launcher helpers", () => {
       recursive: true,
     });
 
-    expect(resolveTestStoreRoot(root)).toBe(path.join(root, "test/min-kb-store"));
+    expect(resolveTestStoreRoot(root)).toBe(
+      path.join(root, "test/min-kb-store")
+    );
   });
 
   it("prefers an explicit test store override", () => {

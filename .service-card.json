@@ -1,0 +1,40 @@
+{
+  "name": "gemma-pwa",
+  "description": "Gemma-focused local chat PWA with optional speech support",
+  "type": "node",
+  "repo": "https://github.com/cmwen/gemma-agent-pwa",
+  "localPath": "/home/cmwen/dev/gemma-agent-pwa",
+  "window": "gemma-pwa",
+  "ports": [
+    {
+      "port": 8787,
+      "name": "api",
+      "description": "REST API port"
+    },
+    {
+      "port": 55006,
+      "name": "web",
+      "description": "Web UI port"
+    }
+  ],
+  "tailscale": {
+    "export": true,
+    "httpsPort": 7444,
+    "targetPort": 55006
+  },
+  "environment": {
+    "NODE_ENV": "production"
+  },
+  "command": {
+    "type": "shell",
+    "cwd": "/home/cmwen/dev/gemma-agent-pwa",
+    "command": "pnpm dev"
+  },
+  "dependencies": [],
+  "healthCheck": {
+    "type": "http",
+    "interval": 5,
+    "timeout": 10,
+    "target": "http://127.0.0.1:55006/"
+  }
+}

@@ -375,7 +375,9 @@ export function createApiApp(workspaces: WorkspaceRegistry) {
       const threadId = input.threadId ?? crypto.randomUUID();
 
       const allAgents = await listAgents(workspace);
-      const candidates = allAgents.filter((a) => a.id !== ORCHESTRATOR_AGENT_ID);
+      const candidates = allAgents.filter(
+        (a) => a.id !== ORCHESTRATOR_AGENT_ID
+      );
 
       const encoder = new EventEncoder({
         accept: context.req.header("accept"),
@@ -437,10 +439,7 @@ export function createApiApp(workspaces: WorkspaceRegistry) {
           });
 
           // Load full details of the chosen target agent
-          const targetAgent = await getAgentById(
-            workspace,
-            routing.agent.id
-          );
+          const targetAgent = await getAgentById(workspace, routing.agent.id);
           if (!targetAgent) {
             logOrchestratorFallback({
               reason: `Agent ${routing.agent.id} not found after routing`,

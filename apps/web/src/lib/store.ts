@@ -112,7 +112,10 @@ export function hasStoredSessionSelection(
   workspaceId: string,
   agentId: string
 ): boolean {
-  return Object.hasOwn(selectedSessionIds, buildScopedAgentKey(workspaceId, agentId));
+  return Object.hasOwn(
+    selectedSessionIds,
+    buildScopedAgentKey(workspaceId, agentId)
+  );
 }
 
 export function getSelectedSessionId(
@@ -123,7 +126,9 @@ export function getSelectedSessionId(
   if (!agentId) {
     return undefined;
   }
-  return selectedSessionIds[buildScopedAgentKey(workspaceId, agentId)] ?? undefined;
+  return (
+    selectedSessionIds[buildScopedAgentKey(workspaceId, agentId)] ?? undefined
+  );
 }
 
 export function buildDraftKey(
