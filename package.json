@@ -16,10 +16,10 @@
     "dev:web": "pnpm --filter @gemma-agent-pwa/web dev"
   },
   "devDependencies": {
-    "@ag-ui/core": "^0.0.55",
-    "@ag-ui/encoder": "^0.0.55",
-    "@biomejs/biome": "^2.4.16",
-    "@playwright/test": "^1.60.0",
+    "@ag-ui/core": "^0.0.57",
+    "@ag-ui/encoder": "^0.0.57",
+    "@biomejs/biome": "^2.5.1",
+    "@playwright/test": "^1.61.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^25.9.1",
@@ -28,6 +28,6 @@
     "tsup": "^8.5.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }
